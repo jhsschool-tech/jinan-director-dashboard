@@ -4,13 +4,22 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+
   <title>منظومة أعمال المدير العام | ثانوية الجنان</title>
+
   <link rel="stylesheet" href="styles.css">
-  <script src="https://accounts.google.com/gsi/client" async defer></script>
+
+  <script
+    src="https://accounts.google.com/gsi/client"
+    async defer>
+  </script>
+
   <script src="app.js" defer></script>
 </head>
+
 <body>
   <div class="layout">
+
     <aside class="sidebar">
       <div class="brand">
         <span class="logo">ج</span>
@@ -21,42 +30,75 @@
       </div>
 
       <nav id="menu">
-        <button data-view="dashboard" class="active">لوحة القيادة</button>
-        <button data-view="departments">الأقسام الإدارية</button>
-        <button data-view="calendar">الروزنامة السنوية</button>
-        <button data-view="routine">الأعمال الثابتة</button>
-        <button data-view="government">المعاملات الرسمية</button>
-        <button data-view="settings">الإعدادات والربط مع Google</button>
+        <button data-view="dashboard" class="active">
+          لوحة القيادة
+        </button>
+
+        <button data-view="departments">
+          الأقسام الإدارية
+        </button>
+
+        <button data-view="calendar">
+          الروزنامة السنوية
+        </button>
+
+        <button data-view="routine">
+          الأعمال الثابتة
+        </button>
+
+        <button data-view="government">
+          المعاملات الرسمية
+        </button>
+
+        <button data-view="settings">
+          الإعدادات والربط مع Google
+        </button>
       </nav>
 
-      <p class="sidebar-note">خطة ثانوية الجنان 2026–2027</p>
+      <p class="sidebar-note">
+        خطة ثانوية الجنان 2026–2027
+      </p>
     </aside>
 
     <div class="workspace">
+
       <header class="topbar">
         <div>
           <small>ثانوية الجنان / الإدارة العامة</small>
           <h1 id="pageTitle">لوحة القيادة</h1>
         </div>
-        <button id="exportBtn" class="outline">نسخة احتياطية</button>
+
+        <button id="exportBtn" class="outline">
+          نسخة احتياطية
+        </button>
       </header>
 
       <main id="content">
         <div class="panel">جارٍ تحميل الأعمال...</div>
       </main>
+
     </div>
   </div>
 
   <dialog id="taskDialog">
+
     <form id="taskForm">
+
       <div class="dialog-heading">
         <h2 id="taskTitle"></h2>
-        <button type="button" id="closeDialog" class="outline">إغلاق</button>
+
+        <button
+          type="button"
+          id="closeDialog"
+          class="outline">
+          إغلاق
+        </button>
       </div>
 
       <div id="taskInfo" class="details"></div>
 
       <div class="form-grid">
+
         <label>
           حالة المهمة
           <select id="taskStatus">
@@ -95,22 +137,38 @@
 
         <label class="wide">
           رابط المستند أو التقرير
-          <input id="taskProof" type="url" placeholder="https://...">
+          <input
+            type="url"
+            id="taskProof"
+            placeholder="https://...">
         </label>
+
       </div>
 
       <div class="dialog-actions">
-        <button type="submit" class="primary">حفظ التعديلات</button>
-        <button type="button" id="calendarDraft" class="outline">
+        <button type="submit" class="primary">
+          حفظ التعديلات
+        </button>
+
+        <button
+          type="button"
+          id="calendarDraft"
+          class="outline">
           فتح في Google Calendar
         </button>
-        <button type="button" id="calendarSync" class="outline">
+
+        <button
+          type="button"
+          id="calendarSync"
+          class="outline">
           مزامنة مباشرة مع Google
         </button>
       </div>
+
     </form>
   </dialog>
 
   <div id="toast" role="status"></div>
+
 </body>
 </html>
