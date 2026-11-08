@@ -1,28 +1,33 @@
-
 <!doctype html>
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>منظومة أعمال المدير العام | ثانوية الجنان</title>
 
+  <!-- Existing styles and application scripts are kept unchanged. -->
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="pwa-brand.css">
 
-  <script
-    src="https://accounts.google.com/gsi/client"
-    async defer>
-  </script>
+  <!-- PWA and iPhone home screen branding. -->
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
+  <meta name="theme-color" content="#102b43">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="إدارة الجنان">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
 
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="app.js" defer></script>
 </head>
-
 <body>
   <div class="layout">
-
     <aside class="sidebar">
       <div class="brand">
-        <span class="logo">ج</span>
+        <img class="brand-logo" src="logo.png" alt="شعار ثانوية الجنان" width="52" height="52">
         <div>
           <strong>ثانوية الجنان</strong>
           <small>منظومة الإدارة العامة</small>
@@ -30,75 +35,39 @@
       </div>
 
       <nav id="menu">
-        <button data-view="dashboard" class="active">
-          لوحة القيادة
-        </button>
-
-        <button data-view="departments">
-          الأقسام الإدارية
-        </button>
-
-        <button data-view="calendar">
-          الروزنامة السنوية
-        </button>
-
-        <button data-view="routine">
-          الأعمال الثابتة
-        </button>
-
-        <button data-view="government">
-          المعاملات الرسمية
-        </button>
-
-        <button data-view="settings">
-          الإعدادات والربط مع Google
-        </button>
+        <button data-view="dashboard" class="active">لوحة القيادة</button>
+        <button data-view="departments">الأقسام الإدارية</button>
+        <button data-view="calendar">الروزنامة السنوية</button>
+        <button data-view="routine">الأعمال الثابتة</button>
+        <button data-view="government">المعاملات الرسمية</button>
+        <button data-view="settings">الإعدادات والربط مع Google</button>
       </nav>
 
-      <p class="sidebar-note">
-        خطة ثانوية الجنان 2026–2027
-      </p>
+      <p class="sidebar-note">خطة ثانوية الجنان 2026–2027</p>
     </aside>
 
     <div class="workspace">
-
       <header class="topbar">
         <div>
           <small>ثانوية الجنان / الإدارة العامة</small>
           <h1 id="pageTitle">لوحة القيادة</h1>
         </div>
-
-        <button id="exportBtn" class="outline">
-          نسخة احتياطية
-        </button>
+        <button id="exportBtn" class="outline">نسخة احتياطية</button>
       </header>
-
       <main id="content">
         <div class="panel">جارٍ تحميل الأعمال...</div>
       </main>
-
     </div>
   </div>
 
   <dialog id="taskDialog">
-
     <form id="taskForm">
-
       <div class="dialog-heading">
         <h2 id="taskTitle"></h2>
-
-        <button
-          type="button"
-          id="closeDialog"
-          class="outline">
-          إغلاق
-        </button>
+        <button type="button" id="closeDialog" class="outline">إغلاق</button>
       </div>
-
       <div id="taskInfo" class="details"></div>
-
       <div class="form-grid">
-
         <label>
           حالة المهمة
           <select id="taskStatus">
@@ -109,66 +78,50 @@
             <option>متعثر</option>
           </select>
         </label>
-
         <label>
           المسؤول المكلّف
           <input id="taskAssignee" placeholder="اسم المسؤول">
         </label>
-
         <label>
           تاريخ الاستحقاق
           <input type="date" id="taskDate">
         </label>
-
         <label>
           تاريخ استلام التقرير
           <input type="date" id="taskReceived">
         </label>
-
         <label class="wide">
           قرار المدير
           <textarea id="taskDecision" rows="3"></textarea>
         </label>
-
         <label class="wide">
           الملاحظات والمتابعة
           <textarea id="taskNotes" rows="3"></textarea>
         </label>
-
         <label class="wide">
           رابط المستند أو التقرير
-          <input
-            type="url"
-            id="taskProof"
-            placeholder="https://...">
+          <input type="url" id="taskProof" placeholder="https://...">
         </label>
-
       </div>
-
       <div class="dialog-actions">
-        <button type="submit" class="primary">
-          حفظ التعديلات
-        </button>
-
-        <button
-          type="button"
-          id="calendarDraft"
-          class="outline">
-          فتح في Google Calendar
-        </button>
-
-        <button
-          type="button"
-          id="calendarSync"
-          class="outline">
-          مزامنة مباشرة مع Google
-        </button>
+        <button type="submit" class="primary">حفظ التعديلات</button>
+        <button type="button" id="calendarDraft" class="outline">فتح في Google Calendar</button>
+        <button type="button" id="calendarSync" class="outline">مزامنة مباشرة مع Google</button>
       </div>
-
     </form>
   </dialog>
-
   <div id="toast" role="status"></div>
 
+  <script>
+    // Register PWA app shell. Google services still require Internet access.
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('./sw.js', { scope: './' })
+          .catch(function (error) {
+            console.warn('Service worker registration failed:', error);
+          });
+      });
+    }
+  </script>
 </body>
 </html>

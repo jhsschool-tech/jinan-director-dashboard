@@ -1,0 +1,19 @@
+/* Logo and small mobile improvements for Al Jinan - loads after styles.css. */
+.brand .brand-logo {
+  display: block;
+  width: 52px;
+  height: 52px;
+  flex: 0 0 52px;
+  object-fit: contain;
+  background: #078b64;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 250, 190, .25);
+}
+.brand { gap: 12px; }
+@supports (padding: env(safe-area-inset-bottom)) {
+  body { padding-bottom: env(safe-area-inset-bottom); }
+  .sidebar { padding-top: max(15px, env(safe-area-inset-top)); }
+}
+@media (max-width: 650px) {
+  .brand .brand-logo { width: 48px; height: 48px; flex-basis: 48px; }
+}
