@@ -11,9 +11,9 @@ const STATUSES = [
 ];
 
 const MONTHS = [
-  'تموز','آب','أيلول','تشرين الأول',
-  'تشرين الثاني','كانون الأول','كانون الثاني',
-  'شباط','آذار','نيسان','أيار','حزيران'
+  'تموز', 'آب', 'أيلول', 'تشرين الأول',
+  'تشرين الثاني', 'كانون الأول', 'كانون الثاني',
+  'شباط', 'آذار', 'نيسان', 'أيار', 'حزيران'
 ];
 
 const LABELS = {
@@ -29,25 +29,35 @@ const LABELS = {
 const content = document.querySelector('#content');
 const dialog = document.querySelector('#taskDialog');
 
-const loadLocal = (key, fallback) => {
+function loadLocal(key, fallback) {
   try {
-    return JSON.parse(localStorage.getItem(key)) || fallback;
-  } catch {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch (err) {
+    console.warn('Local storage unavailable:', err);
     return fallback;
   }
-};
+}
 
-const saveLocal = (key, value) =>
-  localStorage.setItem(key, JSON.stringify(value));
+function saveLocal(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+    return true;
+  } catch (err) {
+    console.error('Could not save locally:', err);
+    return false;
+  }
+}
 
-const escapeHtml = value =>
-  String(value ?? '').replace(/[&<>"']/g, c => ({
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, c => ({
     '&': '&amp;',
     '<': '&lt;',
     '>': '&gt;',
     '"': '&quot;',
     "'": '&#39;'
   }[c]));
+}
 
 const e = escapeHtml;
 
@@ -68,63 +78,101 @@ let month = '';
 let tab = 'all';
 let search = '';
 let statusFilter = '';
-
 let selectedTask = null;
+
 let googleToken = '';
 let tokenExpires = 0;
 let googleScope = '';
 
-const task = original => ({
-  ...original,
-  ...(changes[original.id] || {})
-});
+function task(original) {
+  return {
+    ...original,
+    ...(changes[original.id] || {})
+  };
+}
 
-const byId = id => tasks.find(t => t.id === id);
+function byId(id) {
+  return tasks.find(t => t.id === id);
+}
 
-const today = () => {
-  const items = new Intl.DateTimeFormat('en-CA', {
+function today() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Beirut',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit'
   }).formatToParts(new Date());
 
-  const get = name => items.find(p => p.type === name).value;
+  const get = name => parts.find(p => p.type === name).value;
 
   return `${get('year')}-${get('month')}-${get('day')}`;
-};
+}
 
-const completed = t => task(t).status === 'مُقفل';
+function completed(t) {
+  return task(t).status === 'مُقفل';
+}
 
-const overdue = t =>
-  Boolean(task(t).date && task(t).date < today() && !completed(t));
+function overdue(t) {
+  const item = task(t);
+  return Boolean(
+    item.date && item.date < today() && !completed(t)
+  );
+}
 
-const upcoming = t => {
+function upcoming(t) {
   const date = task(t).date;
 
   const days = date
-    ? (Date.parse(date + 'T00:00:00Z') -
-       Date.parse(today() + 'T00:00:00Z')) / 86400000
+    ? (
+        Date.parse(date + 'T00:00:00Z') -
+        Date.parse(today() + 'T00:00:00Z')
+      ) / 86400000
     : Infinity;
 
   return !completed(t) && days >= 0 && days <= 14;
-};
+}
 
-const formatDate = date =>
-  date
-    ? new Date(date + 'T12:00:00Z').toLocaleDateString('ar-LB', {
-        day: 'numeric',
-        month: 'short',
-        year: 'numeric',
-        timeZone: 'UTC'
-      })
-    : 'غير محدد';
+function formatDate(date) {
+  if (!date) return 'غير محدد';
+
+  return new Date(date + 'T12:00:00Z')
+    .toLocaleDateString('ar-LB', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      timeZone: 'UTC'
+    });
+}
+
+function calendarMonth(date) {
+  const m = Number(String(date || '').slice(5, 7));
+
+  const names = {
+    1: 'كانون الثاني',
+    2: 'شباط',
+    3: 'آذار',
+    4: 'نيسان',
+    5: 'أيار',
+    6: 'حزيران',
+    7: 'تموز',
+    8: 'آب',
+    9: 'أيلول',
+    10: 'تشرين الأول',
+    11: 'تشرين الثاني',
+    12: 'كانون الأول'
+  };
+
+  return names[m] || '';
+}
 
 function alertBox(message) {
   const box = document.querySelector('#toast');
   box.textContent = message;
   box.style.display = 'block';
-  setTimeout(() => box.style.display = 'none', 4500);
+
+  setTimeout(() => {
+    box.style.display = 'none';
+  }, 4500);
 }
 
 function stats(list) {
@@ -161,25 +209,80 @@ function kpis(list) {
 }
 
 function cards() {
-  return `<div class="departments">${
-    departments.map(d => {
-      const s = stats(tasks.filter(t => t.department === d));
-      const percent = s.total
-        ? Math.round(s.done * 100 / s.total)
-        : 0;
+  return `
+    <div class="departments">
+      ${departments.map(d => {
+        const s = stats(
+          tasks.filter(t => t.department === d)
+        );
 
-      return `
-        <button class="dept" data-dept="${e(d)}">
-          <strong>${e(d)}</strong>
+        const percent = s.total
+          ? Math.round(s.done * 100 / s.total)
+          : 0;
+
+        return `
+          <button class="dept" data-dept="${e(d)}">
+            <strong>${e(d)}</strong>
+            <small>
+              ${s.total} عمل ·
+              ${s.late} متأخر ·
+              ${percent}% منجز
+            </small>
+            <span class="progress">
+              <i style="width:${percent}%"></i>
+            </span>
+          </button>`;
+      }).join('')}
+    </div>`;
+}
+
+function rows(list) {
+  if (!list.length) {
+    return `
+      <tr>
+        <td colspan="6">لا توجد مهام مطابقة.</td>
+      </tr>`;
+  }
+
+  return list.map(raw => {
+    const t = task(raw);
+
+    return `
+      <tr>
+        <td>
+          <b>${e(t.title)}</b>
           <small>
-            ${s.total} عمل · ${s.late} متأخر · ${percent}% منجز
+            ${e(t.id)} | ${e(t.department)}
           </small>
-          <span class="progress">
-            <i style="width:${percent}%"></i>
+        </td>
+
+        <td>${e(t.frequency)}</td>
+
+        <td class="${overdue(raw) ? 'late' : ''}">
+          ${e(
+            t.date
+              ? formatDate(t.date)
+              : t.deadlineText || 'حسب الحاجة'
+          )}
+        </td>
+
+        <td>${e(t.priority || '—')}</td>
+
+        <td>
+          <span class="tag" data-status="${e(t.status)}">
+            ${e(t.status)}
           </span>
-        </button>`;
-    }).join('')
-  }</div>`;
+        </td>
+
+        <td>
+          <button
+            class="row-action"
+            data-task="${e(t.id)}">
+            فتح المهمة
+          </button>
+        </td>
+      </tr>`;
+  }).join('');
 }
 
 function table(list) {
@@ -196,59 +299,34 @@ function table(list) {
             <th>المتابعة</th>
           </tr>
         </thead>
-        <tbody id="rows">${rows(list)}</tbody>
+
+        <tbody id="rows">
+          ${rows(list)}
+        </tbody>
       </table>
     </div>
-    <p class="muted" id="count">${list.length} مهمة</p>`;
-}
 
-function rows(list) {
-  if (!list.length) {
-    return '<tr><td colspan="6">لا توجد مهام مطابقة.</td></tr>';
-  }
-
-  return list.map(raw => {
-    const t = task(raw);
-
-    return `
-      <tr>
-        <td>
-          <b>${e(t.title)}</b>
-          <small>${e(t.id)} | ${e(t.department)}</small>
-        </td>
-        <td>${e(t.frequency)}</td>
-        <td class="${overdue(raw) ? 'late' : ''}">
-          ${e(t.date ? formatDate(t.date) :
-              t.deadlineText || 'حسب الحاجة')}
-        </td>
-        <td>${e(t.priority || '—')}</td>
-        <td>
-          <span class="tag" data-status="${e(t.status)}">
-            ${e(t.status)}
-          </span>
-        </td>
-        <td>
-          <button class="row-action" data-task="${e(t.id)}">
-            فتح المهمة
-          </button>
-        </td>
-      </tr>`;
-  }).join('');
+    <p class="muted" id="count">
+      ${list.length} مهمة
+    </p>`;
 }
 
 function toolbar() {
   return `
     <div class="filters">
-      <input id="search"
+      <input
+        id="search"
         placeholder="ابحث عن تقرير أو مسؤول أو مهمة"
         value="${e(search)}">
+
       <select id="statusFilter">
         <option value="">جميع الحالات</option>
-        ${STATUSES.map(x =>
-          `<option ${statusFilter === x ? 'selected' : ''}>
+
+        ${STATUSES.map(x => `
+          <option ${statusFilter === x ? 'selected' : ''}>
             ${e(x)}
-          </option>`
-        ).join('')}
+          </option>
+        `).join('')}
       </select>
     </div>`;
 }
@@ -274,11 +352,14 @@ function filtered(list) {
       (tab === 'routine' && t.kind === 'routine') ||
       (tab === 'government' && t.kind === 'government');
 
-    return match &&
+    return (
+      match &&
       (!statusFilter || t.status === statusFilter) &&
-      category;
+      category
+    );
   }).sort((a, b) =>
-    (task(a).date || '9999').localeCompare(task(b).date || '9999')
+    (task(a).date || '9999')
+      .localeCompare(task(b).date || '9999')
   );
 }
 
@@ -291,18 +372,23 @@ function tabButtons() {
     ['government', 'المعاملات الرسمية']
   ];
 
-  return `<div class="tabs">${
-    options.map(([key, label]) =>
-      `<button class="tab ${tab === key ? 'active' : ''}"
-        data-tab="${key}">${label}</button>`
-    ).join('')
-  }</div>`;
+  return `
+    <div class="tabs">
+      ${options.map(([key, label]) => `
+        <button
+          class="tab ${tab === key ? 'active' : ''}"
+          data-tab="${key}">
+          ${label}
+        </button>
+      `).join('')}
+    </div>`;
 }
 
 function taskSection(list, withTabs = false) {
   return `
     ${withTabs ? tabButtons() : ''}
     ${toolbar()}
+
     <div class="panel" id="results">
       ${table(filtered(list))}
     </div>`;
@@ -310,55 +396,86 @@ function taskSection(list, withTabs = false) {
 
 function render() {
   document.querySelector('#pageTitle').textContent =
-    view === 'department' ? department : LABELS[view];
+    view === 'department'
+      ? department
+      : LABELS[view];
 
-  document.querySelectorAll('#menu button').forEach(b =>
-    b.classList.toggle('active', b.dataset.view === view)
-  );
+  document.querySelectorAll('#menu button').forEach(b => {
+    b.classList.toggle(
+      'active',
+      b.dataset.view === view
+    );
+  });
 
   if (view === 'dashboard') {
     const urgent = tasks
       .filter(t => overdue(t) || upcoming(t))
       .sort((a, b) =>
-        (task(a).date || '9999').localeCompare(task(b).date || '9999')
+        (task(a).date || '9999')
+          .localeCompare(task(b).date || '9999')
       )
       .slice(0, 15);
 
     content.innerHTML = `
       <section class="hero">
         <h2>لوحة متابعة المدير العام</h2>
-        <p>الأعمال السنوية، التقارير الثابتة،
-        المعاملات الرسمية وقرارات المتابعة.</p>
+        <p>
+          الأعمال السنوية، التقارير الثابتة،
+          المعاملات الرسمية وقرارات المتابعة.
+        </p>
       </section>
+
       ${kpis(tasks)}
-      <div class="section-title"><h2>الأقسام الإدارية</h2></div>
+
+      <div class="section-title">
+        <h2>الأقسام الإدارية</h2>
+      </div>
+
       ${cards()}
-      <div class="section-title"><h2>المتابعات العاجلة</h2></div>
-      <div class="panel">${table(urgent)}</div>`;
+
+      <div class="section-title">
+        <h2>المتابعات العاجلة</h2>
+      </div>
+
+      <div class="panel">
+        ${table(urgent)}
+      </div>`;
 
   } else if (view === 'departments') {
     content.innerHTML = `
       <section class="hero">
         <h2>الأقسام الإدارية</h2>
-        <p>اختر القسم للاطلاع على أعماله بالتفصيل.</p>
+        <p>
+          اختر القسم للاطلاع على أعماله بالتفصيل.
+        </p>
       </section>
+
       ${cards()}`;
 
   } else if (view === 'department') {
-    const list = tasks.filter(t => t.department === department);
+    const list = tasks.filter(t =>
+      t.department === department
+    );
 
     content.innerHTML = `
       <section class="hero">
         <h2>${e(department)}</h2>
-        <p>تقارير القسم ومسؤولياته والمواعيد وقرارات المدير.</p>
+        <p>
+          تقارير القسم ومسؤولياته والمواعيد
+          وقرارات المدير.
+        </p>
       </section>
+
       ${kpis(list)}
       ${taskSection(list, true)}`;
 
   } else if (view === 'calendar') {
-    const list = tasks.filter(t =>
-      t.date && (!month || t.month === month)
-    );
+    const list = tasks.filter(raw => {
+      const t = task(raw);
+
+      return t.date &&
+        (!month || calendarMonth(t.date) === month);
+    });
 
     content.innerHTML = `
       <div class="panel">
@@ -367,30 +484,42 @@ function render() {
             تصدير المواعيد إلى Google Calendar (ICS)
           </button>
         </div>
+
         <div class="months">
-          <button data-month="" class="${!month ? 'active' : ''}">
+          <button
+            data-month=""
+            class="${!month ? 'active' : ''}">
             جميع الأشهر
           </button>
-          ${MONTHS.map(m =>
-            `<button data-month="${e(m)}"
+
+          ${MONTHS.map(m => `
+            <button
+              data-month="${e(m)}"
               class="${month === m ? 'active' : ''}">
               ${e(m)}
-            </button>`
-          ).join('')}
+            </button>
+          `).join('')}
         </div>
       </div>
+
       ${taskSection(list)}`;
 
-  } else if (view === 'routine' || view === 'government') {
+  } else if (
+    view === 'routine' ||
+    view === 'government'
+  ) {
     const list = tasks.filter(t => t.kind === view);
 
     content.innerHTML = `
       <section class="hero">
         <h2>${LABELS[view]}</h2>
-        <p>${view === 'government'
-          ? 'تُراجع المواعيد الرسمية وفق أحدث تعميم للجهة المختصة.'
-          : 'متابعات وتقارير ثابتة على مدار السنة.'}</p>
+        <p>
+          ${view === 'government'
+            ? 'تُراجع المواعيد الرسمية وفق أحدث تعميم للجهة المختصة.'
+            : 'متابعات وتقارير ثابتة على مدار السنة.'}
+        </p>
       </section>
+
       ${kpis(list)}
       ${taskSection(list)}`;
 
@@ -403,12 +532,23 @@ function updateRows() {
   const result = document.querySelector('#results');
   if (!result) return;
 
-  const base =
-    view === 'department'
-      ? tasks.filter(t => t.department === department)
-      : view === 'calendar'
-        ? tasks.filter(t => t.date && (!month || t.month === month))
-        : tasks.filter(t => t.kind === view);
+  let base = [];
+
+  if (view === 'department') {
+    base = tasks.filter(t =>
+      t.department === department
+    );
+
+  } else if (view === 'calendar') {
+    base = tasks.filter(raw => {
+      const t = task(raw);
+      return t.date &&
+        (!month || calendarMonth(t.date) === month);
+    });
+
+  } else {
+    base = tasks.filter(t => t.kind === view);
+  }
 
   result.innerHTML = table(filtered(base));
 }
@@ -419,7 +559,8 @@ function openTask(id) {
 
   const t = task(selectedTask);
 
-  document.querySelector('#taskTitle').textContent = t.title;
+  document.querySelector('#taskTitle').textContent =
+    t.title;
 
   const information = [
     ['القسم', t.department],
@@ -432,9 +573,12 @@ function openTask(id) {
   ];
 
   document.querySelector('#taskInfo').innerHTML =
-    information.map(([a, b]) =>
-      `<div><b>${a}:</b> ${e(b || '—')}</div>`
-    ).join('');
+    information.map(([a, b]) => `
+      <div>
+        <b>${a}:</b>
+        ${e(b || '—')}
+      </div>
+    `).join('');
 
   const fields = [
     ['taskStatus', 'status'],
@@ -447,7 +591,8 @@ function openTask(id) {
   ];
 
   for (const [id, key] of fields) {
-    document.querySelector('#' + id).value = t[key] || '';
+    document.querySelector('#' + id).value =
+      t[key] || '';
   }
 
   dialog.showModal();
@@ -471,14 +616,25 @@ function saveTask() {
     updatedAt: new Date().toISOString()
   };
 
-  if (updated.proofUrl &&
-      !/^https:\/\//i.test(updated.proofUrl)) {
+  if (
+    updated.proofUrl &&
+    !/^https:\/\//i.test(updated.proofUrl)
+  ) {
     alertBox('رابط المستند يجب أن يبدأ بـ https://');
     return false;
   }
 
-  changes[id] = updated;
-  saveLocal(STORE, changes);
+  const nextChanges = {
+    ...changes,
+    [id]: updated
+  };
+
+  if (!saveLocal(STORE, nextChanges)) {
+    alertBox('تعذّر الحفظ في المتصفح. تأكد من إعدادات التخزين.');
+    return false;
+  }
+
+  changes = nextChanges;
   render();
 
   return true;
@@ -489,9 +645,14 @@ function calendarDraft() {
   if (!saveTask()) return;
 
   const t = task(selectedTask);
-  if (!t.date) return alertBox('حدّد تاريخ المهمة أولاً');
+
+  if (!t.date) {
+    alertBox('حدّد تاريخ المهمة أولاً');
+    return;
+  }
 
   const start = t.date.replaceAll('-', '');
+
   const next = new Date(
     Date.parse(t.date + 'T00:00:00Z') + 86400000
   ).toISOString().slice(0, 10).replaceAll('-', '');
@@ -500,9 +661,10 @@ function calendarDraft() {
     action: 'TEMPLATE',
     text: t.title,
     dates: `${start}/${next}`,
-    details: `القسم: ${t.department}
-المسؤول: ${t.assignee || t.sourceDepartment}
-دور المدير: ${t.managerAction}`
+    details:
+      `القسم: ${t.department}\n` +
+      `المسؤول: ${t.assignee || t.sourceDepartment}\n` +
+      `دور المدير: ${t.managerAction}`
   });
 
   window.open(
@@ -514,7 +676,10 @@ function calendarDraft() {
 
 function download(name, text, mime) {
   const link = document.createElement('a');
-  const url = URL.createObjectURL(new Blob([text], {type: mime}));
+
+  const url = URL.createObjectURL(
+    new Blob([text], {type: mime})
+  );
 
   link.href = url;
   link.download = name;
@@ -536,31 +701,39 @@ function backup() {
 }
 
 function exportIcs() {
-  let out = [
+  const out = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
     'PRODID:-//Al Jinan High School//Management//AR',
     'CALSCALE:GREGORIAN'
   ];
 
+  const clean = value => String(value || '')
+    .replaceAll('\\', '\\\\')
+    .replaceAll(',', '\\,')
+    .replaceAll(';', '\\;')
+    .replaceAll('\n', '\\n');
+
   for (const original of tasks) {
     const t = task(original);
+
     if (!t.date) continue;
 
     const start = t.date.replaceAll('-', '');
+
     const end = new Date(
       Date.parse(t.date + 'T00:00:00Z') + 86400000
     ).toISOString().slice(0, 10).replaceAll('-', '');
 
-    const clean = v => String(v || '')
-      .replaceAll('\\', '\\\\')
-      .replaceAll(',', '\\,')
-      .replaceAll(';', '\\;')
-      .replaceAll('\n', '\\n');
+    const stamp = new Date()
+      .toISOString()
+      .replace(/[-:]/g, '')
+      .replace(/\.\d{3}Z$/, 'Z');
 
     out.push(
       'BEGIN:VEVENT',
       `UID:${t.id}@jinan-management`,
+      `DTSTAMP:${stamp}`,
       `DTSTART;VALUE=DATE:${start}`,
       `DTEND;VALUE=DATE:${end}`,
       `SUMMARY:${clean(t.title)}`,
@@ -584,28 +757,40 @@ function renderSettings() {
       <div class="panel">
         <h2>ربط Google Calendar</h2>
 
-        <label>OAuth Client ID
-          <input id="clientId" value="${e(config.clientId)}"
+        <label>
+          OAuth Client ID
+          <input
+            id="clientId"
+            value="${e(config.clientId)}"
             placeholder="...apps.googleusercontent.com">
         </label>
 
-        <label>معرّف التقويم
-          <input id="calendarId" value="${e(config.calendarId)}">
+        <label>
+          معرّف التقويم
+          <input
+            id="calendarId"
+            value="${e(config.calendarId)}">
         </label>
 
         <div class="actions">
-          <button class="primary" data-action="saveConfig">
+          <button
+            class="primary"
+            data-action="saveConfig">
             حفظ الإعدادات
           </button>
-          <button class="outline" data-action="connect">
+
+          <button
+            class="outline"
+            data-action="connect">
             ربط حساب Google
           </button>
         </div>
 
         <div class="note">
-          يلزم تفعيل Google Calendar API وإنشاء OAuth Client ID
-          من نوع Web application وإضافة رابط GitHub Pages
-          إلى Authorized JavaScript origins.
+          يجب تفعيل Google Calendar API
+          وإنشاء OAuth Client ID من نوع
+          Web application وإضافة عنوان
+          GitHub Pages إلى Authorized JavaScript origins.
           لا تضع Client Secret في الموقع.
         </div>
       </div>
@@ -613,7 +798,8 @@ function renderSettings() {
       <div class="panel">
         <h2>ربط Google Sheets</h2>
 
-        <label>Spreadsheet ID
+        <label>
+          Spreadsheet ID
           <input id="sheetId" value="${e(config.sheetId)}">
         </label>
 
@@ -621,13 +807,14 @@ function renderSettings() {
           <button class="outline" data-action="push">
             رفع المتابعات إلى Sheets
           </button>
+
           <button class="outline" data-action="pull">
             استيراد المتابعات من Sheets
           </button>
         </div>
 
         <p class="muted">
-          هذه مزامنة يدوية عند الضغط، وليست فورية.
+          المزامنة تتم يدوياً عند الضغط، وليست فورية.
         </p>
       </div>
     </div>
@@ -639,19 +826,25 @@ function renderSettings() {
         <button class="outline" data-action="backup">
           تنزيل نسخة احتياطية
         </button>
+
         <button class="outline" data-action="restore">
           استيراد نسخة احتياطية
         </button>
+
         <button class="outline" data-action="ics">
           ملف التقويم ICS
         </button>
-        <input type="file" id="backupFile"
-          accept=".json,application/json" hidden>
+
+        <input
+          type="file"
+          id="backupFile"
+          accept=".json,application/json"
+          hidden>
       </div>
 
       <div class="note">
-        GitHub Pages موقع عام عادةً. لا ترفع بيانات شخصية
-        أو ملفات داخلية حساسة من دون نظام صلاحيات حقيقي.
+        GitHub Pages ليس نظاماً خاصاً محمياً
+        بكلمات مرور. تجنّب نشر معلومات حساسة.
       </div>
     </div>`;
 }
@@ -664,18 +857,27 @@ function saveConfig() {
     sheetId: document.querySelector('#sheetId').value.trim()
   };
 
-  saveLocal(CONFIG_STORE, config);
+  if (!saveLocal(CONFIG_STORE, config)) {
+    alertBox('تعذّر حفظ إعدادات Google');
+    return;
+  }
+
   googleToken = '';
   alertBox('تم حفظ إعدادات Google');
 }
 
 function getScopes() {
-  return [
-    'https://www.googleapis.com/auth/calendar.events',
-    ...(config.sheetId
-      ? ['https://www.googleapis.com/auth/spreadsheets']
-      : [])
-  ].join(' ');
+  const scopes = [
+    'https://www.googleapis.com/auth/calendar.events'
+  ];
+
+  if (config.sheetId) {
+    scopes.push(
+      'https://www.googleapis.com/auth/spreadsheets'
+    );
+  }
+
+  return scopes.join(' ');
 }
 
 async function getGoogleToken() {
@@ -689,9 +891,11 @@ async function getGoogleToken() {
 
   const scope = getScopes();
 
-  if (googleToken &&
-      Date.now() < tokenExpires - 60000 &&
-      scope === googleScope) {
+  if (
+    googleToken &&
+    Date.now() < tokenExpires - 60000 &&
+    scope === googleScope
+  ) {
     return googleToken;
   }
 
@@ -701,7 +905,10 @@ async function getGoogleToken() {
       scope,
 
       callback: result => {
-        if (result.error) return reject(new Error(result.error));
+        if (result.error) {
+          reject(new Error(result.error));
+          return;
+        }
 
         googleToken = result.access_token;
         tokenExpires =
@@ -711,8 +918,11 @@ async function getGoogleToken() {
         resolve(googleToken);
       },
 
-      error_callback: x =>
-        reject(new Error(x.message || 'تعذّر الاتصال بحساب Google'))
+      error_callback: error => {
+        reject(
+          new Error(error.message || 'تعذّر الاتصال بحساب Google')
+        );
+      }
     });
 
     client.requestAccessToken();
@@ -735,7 +945,7 @@ async function googleApi(url, method = 'GET', body) {
 
   if (!response.ok) {
     throw new Error(
-      data.error?.message || 'فشل طلب Google API'
+      data.error?.message || `Google API error: ${response.status}`
     );
   }
 
@@ -748,11 +958,15 @@ async function syncCalendar() {
 
   const t = task(selectedTask);
 
-  if (!t.date) return alertBox('حدّد موعد المهمة أولاً');
+  if (!t.date) {
+    alertBox('حدّد موعد المهمة أولاً');
+    return;
+  }
 
   const base =
-    `https://www.googleapis.com/calendar/v3/calendars/` +
-    `${encodeURIComponent(config.calendarId || 'primary')}/events`;
+    'https://www.googleapis.com/calendar/v3/calendars/' +
+    encodeURIComponent(config.calendarId || 'primary') +
+    '/events';
 
   const end = new Date(
     Date.parse(t.date + 'T00:00:00Z') + 86400000
@@ -765,11 +979,15 @@ async function syncCalendar() {
       `المسؤول: ${t.assignee || t.sourceDepartment}\n` +
       `دور المدير: ${t.managerAction}\n` +
       `رقم المهمة: ${t.id}`,
+
     start: {date: t.date},
     end: {date: end},
+
     reminders: {
       useDefault: false,
-      overrides: [{method: 'popup', minutes: 1440}]
+      overrides: [
+        {method: 'popup', minutes: 1440}
+      ]
     }
   };
 
@@ -780,10 +998,14 @@ async function syncCalendar() {
     if (old) {
       try {
         event = await googleApi(
-          `${base}/${encodeURIComponent(old)}`, 'PUT', body
+          `${base}/${encodeURIComponent(old)}`,
+          'PUT',
+          body
         );
       } catch (err) {
-        if (!/not found|404/i.test(err.message)) throw err;
+        if (!/not found|404/i.test(err.message)) {
+          throw err;
+        }
         event = await googleApi(base, 'POST', body);
       }
     } else {
@@ -796,12 +1018,22 @@ async function syncCalendar() {
       updatedAt: new Date().toISOString()
     };
 
-    saveLocal(STORE, changes);
-    alertBox('تم إنشاء/تحديث الموعد في Google Calendar');
+    if (!saveLocal(STORE, changes)) {
+      alertBox(
+        'تم تحديث التقويم لكن تعذّر حفظ معرّف الموعد، وقد يتكرر عند إعادة المزامنة.'
+      );
+    } else {
+      alertBox('تم إنشاء/تحديث الموعد في Google Calendar');
+    }
 
     if (event.htmlLink) {
-      window.open(event.htmlLink, '_blank', 'noopener,noreferrer');
+      window.open(
+        event.htmlLink,
+        '_blank',
+        'noopener,noreferrer'
+      );
     }
+
   } catch (err) {
     alertBox(err.message);
   }
@@ -812,25 +1044,39 @@ function sheetBase() {
     throw new Error('أدخل Spreadsheet ID أولاً');
   }
 
-  return `https://sheets.googleapis.com/v4/spreadsheets/${
+  return (
+    'https://sheets.googleapis.com/v4/spreadsheets/' +
     encodeURIComponent(config.sheetId)
-  }`;
+  );
 }
 
 async function ensureSheet() {
   const base = sheetBase();
+
   const meta = await googleApi(
     base + '?fields=sheets.properties.title'
   );
 
-  if (!meta.sheets?.some(s =>
+  const exists = meta.sheets?.some(s =>
     s.properties?.title === 'Jinan_Status'
-  )) {
-    await googleApi(base + ':batchUpdate', 'POST', {
-      requests: [
-        {addSheet: {properties: {title: 'Jinan_Status'}}}
-      ]
-    });
+  );
+
+  if (!exists) {
+    await googleApi(
+      base + ':batchUpdate',
+      'POST',
+      {
+        requests: [
+          {
+            addSheet: {
+              properties: {
+                title: 'Jinan_Status'
+              }
+            }
+          }
+        ]
+      }
+    );
   }
 }
 
@@ -838,11 +1084,11 @@ async function remoteChanges() {
   const base = sheetBase();
   let result;
 
+  const range = "'Jinan_Status'!A2:J10000";
+
   try {
     result = await googleApi(
-      `${base}/values/${
-        encodeURIComponent("'Jinan_Status'!A2:J10000")
-      }`
+      `${base}/values/${encodeURIComponent(range)}`
     );
   } catch (err) {
     if (/Unable to parse range|not found/i.test(err.message)) {
@@ -856,14 +1102,29 @@ async function remoteChanges() {
 
   for (const row of result.values || []) {
     const [
-      id, status, assignee, date, receivedAt,
-      decision, notes, proofUrl, calendarEventId, updatedAt
+      id,
+      status,
+      assignee,
+      date,
+      receivedAt,
+      decision,
+      notes,
+      proofUrl,
+      calendarEventId,
+      updatedAt
     ] = row;
 
     if (valid.has(id)) {
       updates[id] = {
-        status, assignee, date, receivedAt,
-        decision, notes, proofUrl, calendarEventId, updatedAt
+        status,
+        assignee,
+        date,
+        receivedAt,
+        decision,
+        notes,
+        proofUrl,
+        calendarEventId,
+        updatedAt
       };
     }
   }
@@ -875,9 +1136,11 @@ function mergeChanges(local, remote) {
   const merged = {...local};
 
   for (const [id, value] of Object.entries(remote)) {
-    if (!merged[id] ||
-        String(value.updatedAt || '') >
-        String(merged[id].updatedAt || '')) {
+    if (
+      !merged[id] ||
+      String(value.updatedAt || '') >
+      String(merged[id].updatedAt || '')
+    ) {
       merged[id] = value;
     }
   }
@@ -887,10 +1150,19 @@ function mergeChanges(local, remote) {
 
 async function pullSheet() {
   try {
-    changes = mergeChanges(changes, await remoteChanges());
-    saveLocal(STORE, changes);
+    changes = mergeChanges(
+      changes,
+      await remoteChanges()
+    );
+
+    if (!saveLocal(STORE, changes)) {
+      alertBox('تم استيراد البيانات لكن تعذّر حفظها محلياً');
+    } else {
+      alertBox('تم استيراد المتابعات');
+    }
+
     render();
-    alertBox('تم استيراد المتابعات');
+
   } catch (err) {
     alertBox(err.message);
   }
@@ -899,11 +1171,23 @@ async function pullSheet() {
 async function pushSheet() {
   try {
     await ensureSheet();
-    changes = mergeChanges(changes, await remoteChanges());
+
+    changes = mergeChanges(
+      changes,
+      await remoteChanges()
+    );
 
     const columns = [
-      'id','status','assignee','date','receivedAt',
-      'decision','notes','proofUrl','calendarEventId','updatedAt'
+      'id',
+      'status',
+      'assignee',
+      'date',
+      'receivedAt',
+      'decision',
+      'notes',
+      'proofUrl',
+      'calendarEventId',
+      'updatedAt'
     ];
 
     const ids = new Set(tasks.map(t => t.id));
@@ -921,15 +1205,31 @@ async function pushSheet() {
     const range = `'Jinan_Status'!A1:J${values.length}`;
 
     await googleApi(
-      `${sheetBase()}/values/${
-        encodeURIComponent(range)
-      }?valueInputOption=RAW`,
+      `${sheetBase()}/values/${encodeURIComponent(range)}` +
+      '?valueInputOption=RAW',
       'PUT',
-      {range, majorDimension: 'ROWS', values}
+      {
+        range,
+        majorDimension: 'ROWS',
+        values
+      }
     );
 
-    saveLocal(STORE, changes);
-    alertBox('تم رفع المتابعات إلى Google Sheets');
+    const clearRange =
+      `'Jinan_Status'!A${values.length + 1}:J10000`;
+
+    await googleApi(
+      `${sheetBase()}/values/${encodeURIComponent(clearRange)}:clear`,
+      'POST',
+      {}
+    );
+
+    if (!saveLocal(STORE, changes)) {
+      alertBox('تمت المزامنة لكن تعذّر الحفظ المحلي');
+    } else {
+      alertBox('تم رفع المتابعات إلى Google Sheets');
+    }
+
   } catch (err) {
     alertBox(err.message);
   }
@@ -951,9 +1251,14 @@ async function restore(file) {
         .filter(([id]) => valid.has(id))
     );
 
-    saveLocal(STORE, changes);
+    if (!saveLocal(STORE, changes)) {
+      alertBox('تعذّر حفظ النسخة المستوردة');
+      return;
+    }
+
     render();
     alertBox('تم استيراد النسخة الاحتياطية');
+
   } catch (err) {
     alertBox(err.message);
   }
@@ -1075,35 +1380,44 @@ document.querySelector('#calendarDraft')
 document.querySelector('#calendarSync')
   .addEventListener('click', syncCalendar);
 
-// قراءة الأعمال من ملف البيانات
-(async () => {
+// تحميل جميع الأعمال من ملف JSON
+(async function initialize() {
   try {
     const response = await fetch('./data/tasks.json', {
       cache: 'no-store'
     });
 
     if (!response.ok) {
-      throw new Error('تعذّر الوصول إلى ملف البيانات');
+      throw new Error(
+        'لم يُعثر على data/tasks.json، رمز الخطأ: ' +
+        response.status
+      );
     }
 
     const result = await response.json();
 
+    if (
+      !Array.isArray(result.tasks) ||
+      !Array.isArray(result.departments) ||
+      result.tasks.some(t => !t.id || !t.title || !t.department)
+    ) {
+      throw new Error('صيغة ملف tasks.json غير صحيحة');
+    }
+
     tasks = result.tasks;
     departments = result.departments;
-
-    if (!Array.isArray(tasks) ||
-        !Array.isArray(departments)) {
-      throw new Error('صيغة البيانات غير صحيحة');
-    }
 
     render();
 
   } catch (err) {
     content.innerHTML = `
       <div class="note">
-        ${e(err.message)}.
-        افتح الموقع عبر GitHub Pages وليس بالنقر المزدوج
-        على index.html.
+        ${e(err.message)}
+        <p>
+          تأكد من رفع مجلد data وملف tasks.json
+          إلى GitHub بنفس الأسماء تماماً،
+          ثم افتح الموقع عبر GitHub Pages.
+        </p>
       </div>`;
   }
 })();
