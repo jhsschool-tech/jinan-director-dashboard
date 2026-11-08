@@ -1,6 +1,34 @@
 
+'use strict';
+
+/* ===== الإعدادات العامة ===== */
+
+const $ = id => document.getElementById(id);
+
+const e = value => String(value ?? '').replace(
+  /[&<>"']/g,
+  x => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[x])
+);
+
 const STORE = 'jinan-manager-changes-word-v2';
-const GOOGLE_STORE = 'jinan-manager-config-v1';
+const CONFIG_STORE = 'jinan-manager-config-v1';
+const EXTRA_STORE = 'jinan-extra-tasks-v3';
+const JOB_STORE = 'jinan-job-descriptions-v3';
+const PENDING_STORE = 'jinan-pending-cloud-v3';
+
+const SHEET_NAME = 'Jinan_Updates';
+
+const SCOPE = {
+  calendar: 'https://www.googleapis.com/auth/calendar.events',
+  sheets: 'https://www.googleapis.com/auth/spreadsheets',
+  gmail: 'https://www.googleapis.com/auth/gmail.send'
+};
 
 const STATUSES = [
   'لم يُستلم',
@@ -19,75 +47,138 @@ const MONTHS = [
 
 const TITLES = {
   dashboard: 'لوحة القيادة',
+  organization: 'الهيكلية الإدارية',
   departments: 'الأقسام الإدارية',
   department: 'أعمال القسم',
+  jobs: 'الأوصاف الوظيفية',
   calendar: 'الروزنامة السنوية',
   routine: 'الأعمال الثابتة',
   government: 'المعاملات الرسمية',
-  settings: 'الإعدادات والربط'
+  settings: 'الإعدادات والربط مع Google'
 };
 
-const content = document.getElementById('content');
-const dialog = document.getElementById('taskDialog');
-const el = id => document.getElementById(id);
+const KIND_LABEL = {
+  plan: 'عمل سنوي',
+  routine: 'تقرير ثابت',
+  oversight: 'متابعة ورقابة',
+  calendar: 'روزنامة',
+  government: 'معاملة رسمية'
+};
 
-const escapeHTML = value =>
-  String(value ?? '').replace(/[&<>"']/g, c => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;'
-  }[c]));
+/* ===== الحفظ المحلي ===== */
 
-const e = escapeHTML;
-
-function load(key, fallback) {
+function loadLocal(key, fallback) {
   try {
-    return JSON.parse(localStorage.getItem(key)) || fallback;
-  } catch {
+    const value = localStorage.getItem(key);
+    return value ? JSON.parse(value) : fallback;
+  } catch (error) {
+    console.warn('التخزين المحلي غير متاح', error);
     return fallback;
   }
 }
 
-function save(key, value) {
+function saveLocal(key, value) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
     return true;
-  } catch {
+  } catch (error) {
+    console.error('تعذّر التخزين المحلي', error);
     return false;
   }
 }
 
-let tasks = [];
-let departments = [];
-let changes = load(STORE, {});
+function stamp() {
+  return new Date().toISOString();
+}
 
-let googleConfig = {
-  clientId: '',
-  calendarId: 'primary',
-  sheetId: '',
-  ...load(GOOGLE_STORE, {})
-};
+function stampView(value) {
+  if (!value) return 'لم يُسجل بعد';
 
-let view = 'dashboard';
-let department = '';
-let month = '';
-let category = 'all';
-let query = '';
-let filterStatus = '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(value))) {
+    return `${value} (من النسخة السابقة؛ الوقت غير مسجل)`;
+  }
 
-let selected = null;
-let accessToken = '';
-let tokenExpiry = 0;
-let tokenScope = '';
+  const d = new Date(value);
 
-// =======================================
-// ألوان الأقسام
-// =======================================
+  if (Number.isNaN(d.getTime())) return String(value);
 
-function theme(name = '') {
-  if (name.includes('الإشراف الإداري')) {
+  return d.toLocaleString('ar-LB', {
+    timeZone: 'Asia/Beirut',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+function today() {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Beirut',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+
+  const parts = formatter.formatToParts(new Date());
+
+  const get = key => parts.find(p => p.type === key).value;
+
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
+function dateView(date) {
+  return date
+    ? new Date(date + 'T12:00:00Z').toLocaleDateString(
+        'ar-LB',
+        {
+          day: 'numeric',
+          month: 'short',
+          year: 'numeric',
+          timeZone: 'UTC'
+        }
+      )
+    : 'غير محدد';
+}
+
+function safeUrl(value) {
+  return /^https:\/\/[^\s]+$/i.test(String(value || ''));
+}
+
+function validEmail(value) {
+  return /^[^\s@\r\n]+@[^\s@\r\n]+\.[^\s@\r\n]+$/.test(
+    String(value || '')
+  );
+}
+
+function notify(message, warning = false) {
+  const box = $('toast');
+
+  box.textContent = message;
+  box.style.display = 'block';
+  box.style.background = warning ? '#80501b' : '#143c51';
+
+  clearTimeout(notify.timer);
+
+  notify.timer = setTimeout(() => {
+    box.style.display = 'none';
+  }, 5700);
+}
+
+function indicator(message, mode = '') {
+  const box = $('syncIndicator');
+
+  box.textContent = message;
+  box.className = 'sync-indicator ' + mode;
+}
+
+/* ===== ألوان الأقسام ===== */
+
+function deptTheme(name = '') {
+  if (
+    name.includes('الإشراف الإداري') ||
+    name.includes('الاشراف الاداري')
+  ) {
     return 'administrative';
   }
 
@@ -120,535 +211,92 @@ function theme(name = '') {
   return 'neutral';
 }
 
-// =======================================
-// بيانات المهام والحالات
-// =======================================
+/* ===== بيانات النظام ===== */
 
-const current = task => ({
-  ...task,
-  ...(changes[task.id] || {})
-});
+let baseTasks = [];
+let tasks = [];
+let departments = [];
 
-const byId = id => tasks.find(t => t.id === id);
+let changes = loadLocal(STORE, {});
+let customTasks = loadLocal(EXTRA_STORE, {});
+let jobs = loadLocal(JOB_STORE, {});
+let pending = loadLocal(PENDING_STORE, []);
 
-const isDone = t => current(t).status === 'مُقفل';
+let config = {
+  clientId: '',
+  calendarId: 'primary',
+  sheetId: '',
+  editorName: '',
+  ...loadLocal(CONFIG_STORE, {})
+};
 
-function today() {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Beirut',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit'
-  }).formatToParts(new Date());
+let view = 'dashboard';
+let department = '';
+let month = '';
+let tab = 'all';
+let search = '';
+let statusFilter = '';
+let jobSearch = '';
+let jobDepartment = '';
 
-  const get = name =>
-    parts.find(p => p.type === name).value;
+let selectedTask = null;
+let editingTaskId = null;
+let editingJobId = null;
 
-  return `${get('year')}-${get('month')}-${get('day')}`;
-}
+let oauthToken = '';
+let tokenExpires = 0;
+let oauthGranted = new Set();
+let syncBusy = false;
 
-function isLate(t) {
-  const item = current(t);
+/* ===== معالجة الأعمال ===== */
 
-  return !!(
-    item.date &&
-    item.date < today() &&
-    !isDone(t)
-  );
-}
-
-function isSoon(t) {
-  const date = current(t).date;
-
-  if (!date || isDone(t)) return false;
-
-  const days = (
-    Date.parse(date + 'T00:00:00Z') -
-    Date.parse(today() + 'T00:00:00Z')
-  ) / 86400000;
-
-  return days >= 0 && days <= 14;
-}
-
-function dateView(date) {
-  if (!date) return 'غير محدد';
-
-  return new Date(date + 'T12:00:00Z')
-    .toLocaleDateString('ar-LB', {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-      timeZone: 'UTC'
-    });
-}
-
-function notice(message) {
-  const toast = el('toast');
-
-  toast.textContent = message;
-  toast.style.display = 'block';
-
-  setTimeout(() => {
-    toast.style.display = 'none';
-  }, 4000);
-}
-
-// =======================================
-// قراءة ملف Word الأصلي
-// =======================================
-
-// استخراج ملف document.xml من داخل DOCX
-// بواسطة إمكانات المتصفح الحديثة.
-
-async function wordXml(filename) {
-  const response = await fetch(filename, {
-    cache: 'no-store'
-  });
-
-  if (!response.ok) {
-    throw Error(
-      `لم يُعثر على ملف Word (${response.status}): ${filename}`
-    );
-  }
-
-  const bytes = new Uint8Array(
-    await response.arrayBuffer()
+function buildTasks() {
+  const extra = Object.values(customTasks).filter(
+    item => !item.deleted
   );
 
-  const dv = new DataView(bytes.buffer);
-
-  const u16 = n => dv.getUint16(n, true);
-  const u32 = n => dv.getUint32(n, true);
-
-  let end = -1;
-
-  for (
-    let i = bytes.length - 22;
-    i >= Math.max(0, bytes.length - 65557);
-    i--
-  ) {
-    if (u32(i) === 0x06054b50) {
-      end = i;
-      break;
-    }
-  }
-
-  if (end < 0) {
-    throw Error('ملف Word غير صالح');
-  }
-
-  const decode = new TextDecoder('utf-8');
-  let pos = u32(end + 16);
-
-  for (let i = 0; i < u16(end + 10); i++) {
-    if (u32(pos) !== 0x02014b50) {
-      throw Error('خطأ في بيانات Word');
-    }
-
-    const method = u16(pos + 10);
-    const size = u32(pos + 20);
-    const nameLen = u16(pos + 28);
-    const extra = u16(pos + 30);
-    const comment = u16(pos + 32);
-    const offset = u32(pos + 42);
-
-    const name = decode.decode(
-      bytes.slice(pos + 46, pos + 46 + nameLen)
-    );
-
-    pos += 46 + nameLen + extra + comment;
-
-    if (name !== 'word/document.xml') {
-      continue;
-    }
-
-    if (u32(offset) !== 0x04034b50) {
-      throw Error('محتوى Word غير صالح');
-    }
-
-    const start =
-      offset +
-      30 +
-      u16(offset + 26) +
-      u16(offset + 28);
-
-    const compressed = bytes.slice(
-      start,
-      start + size
-    );
-
-    if (method === 0) {
-      return decode.decode(compressed);
-    }
-
-    if (
-      method !== 8 ||
-      !('DecompressionStream' in window)
-    ) {
-      throw Error(
-        'استخدم Chrome أو Edge محدّثاً لقراءة ملف Word'
-      );
-    }
-
-    const stream = new Blob([compressed])
-      .stream()
-      .pipeThrough(
-        new DecompressionStream('deflate-raw')
-      );
-
-    return decode.decode(
-      await new Response(stream).arrayBuffer()
-    );
-  }
-
-  throw Error(
-    'ملف Word لا يحتوي على جداول قابلة للقراءة'
-  );
+  tasks = [...baseTasks, ...extra];
 }
 
-// =======================================
-// استخراج الجداول من XML
-// =======================================
-
-function extractTables(xmlText) {
-  const xml = new DOMParser().parseFromString(
-    xmlText,
-    'application/xml'
-  );
-
-  if (
-    xml.getElementsByTagName('parsererror').length
-  ) {
-    throw Error('تعذّر تحليل ملف Word');
-  }
-
-  const body = Array.from(
-    xml.documentElement.getElementsByTagName('*')
-  ).find(x => x.localName === 'body');
-
-  if (!body) {
-    throw Error('الملف لا يحتوي على جداول Word');
-  }
-
-  const children = node =>
-    Array.from(node.children);
-
-  return children(body)
-    .filter(x => x.localName === 'tbl')
-    .map(tbl =>
-      children(tbl)
-        .filter(x => x.localName === 'tr')
-        .map(row =>
-          children(row)
-            .filter(x => x.localName === 'tc')
-            .map(cell =>
-              children(cell)
-                .filter(x => x.localName === 'p')
-                .map(p =>
-                  Array.from(
-                    p.getElementsByTagName('*')
-                  )
-                    .filter(x => x.localName === 't')
-                    .map(x => x.textContent)
-                    .join('')
-                )
-                .join('\n')
-                .trim()
-            )
-        )
-    );
-}
-
-// =======================================
-// تحويل الجداول إلى أعمال المدير
-// =======================================
-
-function rowsFromWord(tables, departmentNames) {
-  const annual = [
-    1, 3, 5, 7, 10,
-    13, 16, 20, 22, 25
-  ];
-
-  const fixed = [
-    2, 4, 6, 8, 11,
-    14, 17, 21, 23, 26
-  ];
-
-  const months = [
-    'آذار',
-    'نيسان',
-    'أيار',
-    'حزيران',
-    'تموز',
-    'آب',
-    'أيلول',
-    'تشرين الأول',
-    'تشرين الثاني',
-    'كانون الأول',
-    'كانون الثاني',
-    'شباط'
-  ];
-
-  const extras = {
-    9: [
-      3,
-      'محور الرقابة المالية وإدارة المخاطر'
-    ],
-    12: [
-      4,
-      'محور قياس فعالية التسويق واستقطاب المتعلمين'
-    ],
-    15: [
-      5,
-      'محور متابعة الأندية والبرامج اللامنهجية'
-    ],
-    18: [
-      6,
-      'محور متابعة خدمات الإرشاد والدعم'
-    ],
-    19: [
-      7,
-      'نطاق الإشراف الإداري'
-    ],
-    24: [
-      9,
-      'المجالات التي تخضع لمتابعة الجودة'
-    ]
+function task(raw) {
+  return {
+    ...raw,
+    ...(changes[raw.id] || {})
   };
-
-  const official = [
-    'معاملات وزارة التربية والتعليم العالي',
-    'صندوق تعويضات أفراد الهيئة التعليمية',
-    'الصندوق الوطني للضمان الاجتماعي',
-    'وزارة المالية والالتزامات الضريبية',
-    'معاملات صحية وموافقات رسمية أخرى'
-  ];
-
-  const kinds = {
-    plan: 'أعمال سنوية',
-    routine: 'تقارير دورية ثابتة',
-    oversight: 'محاور المتابعة والرقابة',
-    government: 'معاملة رسمية',
-    calendar: 'روزنامة مركزية',
-    central: 'تقارير دورية ثابتة للمدير العام'
-  };
-
-  const output = [];
-
-  function add(tableIndex, kind, department, section) {
-    const table = tables[tableIndex];
-
-    if (!table) {
-      throw Error(
-        `جدول رقم ${tableIndex + 1} غير موجود`
-      );
-    }
-
-    for (let i = 1; i < table.length; i++) {
-      let cells = table[i];
-
-      if (!cells.some(Boolean)) continue;
-
-      const result = {
-        id:
-          `WORD-T${String(tableIndex).padStart(2, '0')}` +
-          `-R${String(i).padStart(2, '0')}`,
-
-        kind:
-          kind === 'central'
-            ? 'routine'
-            : kind,
-
-        department,
-        section,
-
-        originalTable: tableIndex + 1,
-        originalRow: i + 1,
-
-        frequency: kinds[kind],
-        status: 'لم يُستلم'
-      };
-
-      if (
-        kind === 'plan' ||
-        kind === 'routine'
-      ) {
-        if (tableIndex === 3) {
-          cells = [0, 2, 3, 4, 5, 6]
-            .map(j => cells[j]);
-        }
-
-        if (cells.length !== 6) {
-          throw Error(
-            'تغيّر عدد أعمدة ملف Word'
-          );
-        }
-
-        const [
-          deadlineText,
-          title,
-          evidence,
-          sourceAssignee,
-          managerAction,
-          followUp
-        ] = cells;
-
-        Object.assign(result, {
-          deadlineText,
-          title,
-          evidence,
-          sourceAssignee,
-          managerAction,
-          followUp
-        });
-
-      } else if (kind === 'oversight') {
-        if (![2, 3, 4].includes(cells.length)) {
-          throw Error('خطأ في أعمدة المتابعة');
-        }
-
-        result.title = cells[0];
-
-        if (cells[1]) {
-          result.description = cells[1];
-        }
-
-        if (cells[2]) {
-          result.evidence = cells[2];
-        }
-
-        if (cells[3]) {
-          result.followUp = cells[3];
-        }
-
-      } else if (kind === 'government') {
-        const [
-          title,
-          deadlineText,
-          evidence,
-          sourceAssignee
-        ] = cells;
-
-        Object.assign(result, {
-          title,
-          deadlineText,
-          evidence,
-          sourceAssignee
-        });
-
-      } else if (kind === 'calendar') {
-        const [
-          deadlineText,
-          title,
-          sourceAssignee,
-          managerAction
-        ] = cells;
-
-        Object.assign(result, {
-          title,
-          deadlineText,
-          sourceAssignee,
-          managerAction,
-          month: months[tableIndex - 32]
-        });
-
-      } else {
-        const [
-          deadlineText,
-          title,
-          evidence,
-          sourceAssignee,
-          managerAction
-        ] = cells;
-
-        Object.assign(result, {
-          deadlineText,
-          title,
-          evidence,
-          sourceAssignee,
-          managerAction
-        });
-      }
-
-      result.reference =
-        `أعمال المدير العام.docx — ${section} — ` +
-        `الجدول ${tableIndex + 1}، الصف ${i + 1}`;
-
-      if (!result.title) {
-        throw Error(
-          'أحد أعمال Word لا يحمل عنواناً'
-        );
-      }
-
-      output.push(result);
-    }
-  }
-
-  // أعمال الأقسام السنوية والثابتة
-  for (let i = 0; i < 10; i++) {
-    add(
-      annual[i],
-      'plan',
-      departmentNames[i],
-      'جدول المتابعة السنوية'
-    );
-
-    add(
-      fixed[i],
-      'routine',
-      departmentNames[i],
-      'التقارير الدورية الثابتة'
-    );
-  }
-
-  // محاور الرقابة
-  for (
-    const [number, [index, title]]
-    of Object.entries(extras)
-  ) {
-    add(
-      Number(number),
-      'oversight',
-      departmentNames[index],
-      title
-    );
-  }
-
-  // المعاملات الرسمية
-  for (let i = 27; i <= 31; i++) {
-    add(
-      i,
-      'government',
-      'المعاملات والملفات الرسمية مع الدولة',
-      official[i - 27]
-    );
-  }
-
-  // الروزنامة المركزية
-  for (let i = 32; i <= 43; i++) {
-    add(
-      i,
-      'calendar',
-      'الإدارة العامة والقيادة المدرسية',
-      'الروزنامة السنوية المركزية للمدير العام'
-    );
-  }
-
-  add(
-    44,
-    'central',
-    'الإدارة العامة والقيادة المدرسية',
-    'التقارير الدورية الثابتة للمدير العام'
-  );
-
-  return output;
 }
 
-// =======================================
-// مؤشرات لوحة القيادة
-// =======================================
+function byId(id) {
+  return tasks.find(t => t.id === id);
+}
 
-function numbers(list) {
+function isDone(raw) {
+  return task(raw).status === 'مُقفل';
+}
+
+function isLate(raw) {
+  const t = task(raw);
+
+  return Boolean(
+    t.date &&
+    t.date < today() &&
+    !isDone(raw)
+  );
+}
+
+function isSoon(raw) {
+  const t = task(raw);
+
+  return (
+    !isDone(raw) &&
+    t.date >= today() &&
+    (
+      Date.parse(t.date + 'T00:00:00Z') -
+      Date.parse(today() + 'T00:00:00Z')
+    ) / 86400000 <= 14
+  );
+}
+
+function stats(list) {
   return {
     total: list.length,
     done: list.filter(isDone).length,
@@ -657,21 +305,21 @@ function numbers(list) {
   };
 }
 
-function counters(list) {
-  const s = numbers(list);
+function kpis(list) {
+  const s = stats(list);
 
-  const items = [
-    ['إجمالي البنود', s.total],
+  const values = [
+    ['الأعمال', s.total],
     ['المقفلة', s.done],
-    ['المتأخرة بعد تحديد تاريخ', s.late],
-    ['المستحقة خلال 14 يوماً', s.soon]
+    ['المتأخرة (المؤرخة)', s.late],
+    ['خلال 14 يوماً', s.soon]
   ];
 
   return `
     <div class="kpis">
-      ${items.map(([name, value]) => `
+      ${values.map(([label, value]) => `
         <div class="kpi">
-          <span>${name}</span>
+          <span>${label}</span>
           <strong>${value}</strong>
         </div>
       `).join('')}
@@ -679,17 +327,11 @@ function counters(list) {
   `;
 }
 
-// =======================================
-// بطاقات الأقسام الملونة
-// =======================================
-
 function cards() {
   return `
     <div class="departments">
-
       ${departments.map(d => {
-
-        const s = numbers(
+        const s = stats(
           tasks.filter(t => t.department === d)
         );
 
@@ -698,10 +340,9 @@ function cards() {
           : 0;
 
         return `
-          <button
-            class="dept"
-            data-theme="${theme(d)}"
-            data-dept="${e(d)}">
+          <button class="dept"
+                  data-theme="${deptTheme(d)}"
+                  data-dept="${e(d)}">
 
             <strong>${e(d)}</strong>
 
@@ -714,75 +355,90 @@ function cards() {
             <span class="progress">
               <i style="width:${percent}%"></i>
             </span>
-
           </button>
         `;
       }).join('')}
-
     </div>
   `;
 }
 
-// =======================================
-// جدول عرض الأعمال
-// =======================================
+function linkButton(url, label = 'فتح التقرير') {
+  return safeUrl(url)
+    ? `<a class="open-doc"
+          href="${e(url)}"
+          target="_blank"
+          rel="noopener noreferrer">${e(label)}</a>`
+    : '';
+}
 
 function rows(list) {
   if (!list.length) {
-    return `
-      <tr>
-        <td colspan="6">
-          لا توجد أعمال مطابقة.
-        </td>
-      </tr>
-    `;
+    return '<tr><td colspan="7">لا توجد بنود مطابقة.</td></tr>';
   }
 
   return list.map(raw => {
-    const t = current(raw);
+    const t = task(raw);
+    const delivered = t.proofUrl && t.receivedAt;
+
+    const report = delivered
+      ? `
+        <span class="receipt">
+          ${e(stampView(t.receivedAt))}
+        </span>
+        <br>
+        ${linkButton(t.proofUrl)}
+      `
+      : t.proofUrl
+        ? linkButton(t.proofUrl)
+        : '<span class="muted">لم يصل رابط</span>';
 
     return `
       <tr>
         <td>
           <b>${e(t.title)}</b>
-
           <small>
-            ${e(t.section)} |
-            ${e(t.id)}
+            ${e(t.section || KIND_LABEL[t.kind] || 'عمل')}
+            | ${e(t.id)}
           </small>
         </td>
 
-        <td>${e(t.frequency)}</td>
+        <td>${e(t.frequency || KIND_LABEL[t.kind] || '—')}</td>
 
         <td class="${isLate(raw) ? 'late' : ''}">
           ${e(
             t.deadlineText ||
-            (t.date ? dateView(t.date) : 'حسب الخطة')
+            (t.date ? dateView(t.date) : 'تُحدّد')
           )}
         </td>
 
         <td>
-          ${e(
-            t.assignee ||
-            t.sourceAssignee ||
-            '—'
-          )}
-        </td>
-
-        <td>
-          <span
-            class="tag"
-            data-status="${e(t.status)}">
-            ${e(t.status)}
+          <span class="tag"
+                data-status="${e(t.status || 'لم يُستلم')}">
+            ${e(t.status || 'لم يُستلم')}
           </span>
         </td>
 
+        <td>${report}</td>
+
         <td>
-          <button
-            class="row-action"
-            data-task="${e(t.id)}">
-            التفاصيل
-          </button>
+          ${e(t.assignee || t.sourceAssignee || '—')}
+        </td>
+
+        <td>
+          <div class="quick-actions">
+            <button class="row-action"
+                    data-task="${e(t.id)}"
+                    type="button">
+              فتح
+            </button>
+
+            <button
+              class="row-action row-reminder ${t.calendarEventId ? 'ready' : ''}"
+              data-remind="${e(t.id)}"
+              type="button">
+              🔔 ${t.calendarEventId ? 'تحديث التذكير' : 'ذكّرني'}
+            </button>
+          </div>
         </td>
       </tr>
     `;
@@ -795,117 +451,111 @@ function table(list) {
       <table>
         <thead>
           <tr>
-            <th>العمل كما في Word</th>
+            <th>العمل</th>
             <th>النوع</th>
-            <th>الموعد الأصلي</th>
-            <th>المسؤول</th>
+            <th>الموعد</th>
             <th>الحالة</th>
-            <th>عرض</th>
+            <th>التقرير ووقت الوصول</th>
+            <th>المسؤول</th>
+            <th>إجراءات</th>
           </tr>
         </thead>
-
         <tbody>
           ${rows(list)}
         </tbody>
       </table>
     </div>
-
-    <p class="muted">
-      ${list.length} بند
-    </p>
+    <p class="muted">${list.length} بند</p>
   `;
 }
 
-// =======================================
-// البحث والتصفية
-// =======================================
+function toolbar() {
+  return `
+    <div class="filters">
+      <input id="search"
+             placeholder="بحث عن تقرير أو عمل أو مسؤول"
+             value="${e(search)}">
 
-function matches(list) {
-  const q = query.trim().toLowerCase();
+      <select id="statusFilter">
+        <option value="">كل الحالات</option>
+        ${STATUSES.map(x => `
+          <option value="${e(x)}"
+                  ${statusFilter === x ? 'selected' : ''}>
+            ${e(x)}
+          </option>
+        `).join('')}
+      </select>
+    </div>
+  `;
+}
+
+function filtered(list) {
+  const q = search.trim().toLocaleLowerCase('ar');
 
   return list.filter(raw => {
-    const t = current(raw);
+    const t = task(raw);
 
     const text = [
       t.title,
       t.department,
       t.section,
+      t.deadlineText,
       t.evidence,
-      t.sourceAssignee,
       t.assignee,
+      t.sourceAssignee,
       t.managerAction,
       t.followUp,
-      t.deadlineText
-    ].join(' ').toLowerCase();
+      t.description
+    ].join(' ').toLocaleLowerCase('ar');
 
     return (
       text.includes(q) &&
-      (!filterStatus || t.status === filterStatus) &&
-      (category === 'all' || t.kind === category)
+      (!statusFilter || t.status === statusFilter) &&
+      (tab === 'all' || t.kind === tab)
     );
   });
 }
 
-function taskArea(list, tabs = false) {
+function taskArea(list, withTabs = false) {
   const types = [
-    ['all', 'جميع الأعمال'],
+    ['all', 'كل الأعمال'],
     ['plan', 'الأعمال السنوية'],
     ['routine', 'التقارير الثابتة'],
-    ['oversight', 'محاور المتابعة'],
-    ['calendar', 'الروزنامة المركزية'],
+    ['oversight', 'الرقابة والمتابعة'],
+    ['calendar', 'الروزنامة'],
     ['government', 'المعاملات الرسمية']
   ];
 
   return `
-    ${tabs ? `
+    ${withTabs ? `
       <div class="tabs">
-
-        ${types.map(([code, label]) => `
+        ${types.map(([key, label]) => `
           <button
-            class="tab ${category === code ? 'active' : ''}"
-            data-tab="${code}">
+            class="tab ${tab === key ? 'active' : ''}"
+            type="button"
+            data-tab="${key}">
             ${label}
           </button>
         `).join('')}
-
       </div>
     ` : ''}
 
-    <div class="filters">
-
-      <input
-        id="search"
-        placeholder="بحث في الأعمال والتقارير"
-        value="${e(query)}">
-
-      <select id="statusFilter">
-        <option value="">جميع الحالات</option>
-
-        ${STATUSES.map(s => `
-          <option ${filterStatus === s ? 'selected' : ''}>
-            ${e(s)}
-          </option>
-        `).join('')}
-
-      </select>
-    </div>
+    ${toolbar()}
 
     <div class="panel" id="results">
-      ${table(matches(list))}
+      ${table(filtered(list))}
     </div>
   `;
 }
 
-function baseList() {
+function mainList() {
   if (view === 'department') {
-    return tasks.filter(t =>
-      t.department === department
-    );
+    return tasks.filter(t => t.department === department);
   }
 
   if (view === 'calendar') {
-    return tasks.filter(t =>
-      t.kind === 'calendar' &&
+    return tasks.filter(
+      t => t.kind === 'calendar' &&
       (!month || t.month === month)
     );
   }
@@ -913,152 +563,543 @@ function baseList() {
   return tasks.filter(t => t.kind === view);
 }
 
-function updateTable() {
-  const box = el('results');
+function updateRows() {
+  const box = $('results');
 
   if (box) {
-    box.innerHTML = table(
-      matches(baseList())
-    );
+    box.innerHTML = table(filtered(mainList()));
   }
 }
 
-// =======================================
-// رسم صفحات البرنامج
-// =======================================
+/* =====================================
+   الهيكلية الإدارية الرسمية
+   ===================================== */
+
+const OFFICIAL_ORG = [
+  {
+    title: 'الإشراف الإداري والجودة',
+    person: 'أ. سامي حلاق',
+    group: 'الإشراف الإداري والعمليات والخدمات المدرسية',
+    children: [
+      ['قسم الإعلام والتسويق', 'أ. سمية النجار'],
+      ['مسؤول مكننة ومعلوماتية', ''],
+      ['ممرض', ''],
+      ['المشرف الصحي', ''],
+      ['مسؤول مخزون', ''],
+      ['مسؤول مشتريات', ''],
+      ['مسؤول الصيانة', ''],
+      ['حارس', ''],
+      ['سائق', '']
+    ]
+  },
+  {
+    title: 'نائب المدير',
+    person: 'د. يكانة يكن',
+    group: 'الإدارة العامة والقيادة المدرسية',
+    children: []
+  },
+  {
+    title: 'شؤون الطلاب',
+    person: 'أ. مصطفى كمون',
+    group: 'شؤون المتعلمين',
+    children: []
+  },
+  {
+    title: 'المدقق المالي',
+    person: '',
+    group: 'الشؤون المالية والمحاسبة',
+    children: []
+  },
+  {
+    title: 'المدير المالي',
+    person: 'د. يكانة يكن',
+    group: 'الشؤون المالية والمحاسبة',
+    children: [
+      ['محاسب', 'أ. فاطمة أبو زيد'],
+      ['أمين صندوق', 'أ. هنادي لاذقاني']
+    ]
+  },
+  {
+    title: 'أمين السر',
+    person: '',
+    group: 'أمانة السر والمراسلات والأرشفة',
+    children: []
+  },
+  {
+    title: 'موارد بشرية',
+    person: 'أ. صبا الخضر',
+    group: 'إدارة الموارد البشرية',
+    children: []
+  },
+  {
+    title: 'الإشراف التربوي',
+    person: 'أ. محمد صهيوني',
+    group: 'الإشراف التربوي والأكاديمي',
+    children: [
+      ['مسؤولة الأنشطة', 'أ. رحمة كبارة'],
+      ['عامل صحي اجتماعي', 'أ. هبة شعاع'],
+      ['مسؤول مختبر العلوم', 'أ. ريما حمود'],
+      ['مسؤول مكتبة', ''],
+      ['مسؤول مختبر الكمبيوتر', 'أ. غنى درويش'],
+      ['إشراف المرحلة الثانوية', 'أ. نهى الزهر'],
+      ['إشراف الحلقتين الثالثة والرابعة', 'أ. زينة ولي الدين'],
+      ['إشراف الحلقتين الثانية والأولى', 'أ. بشرى الزيلع'],
+      ['إشراف مرحلة الروضات', 'أ. ماجدة حداد'],
+      ['إشراف قسم الدعم التربوي', 'أ. رفاه حيدر']
+    ]
+  }
+];
+
+function organization() {
+  function node(title, person, group) {
+    const saved = Object.values(jobs).find(
+      j => !j.deleted && j.title === title
+    );
+
+    const action = saved
+      ? `data-job="${e(saved.id)}"`
+      : `data-add-org-role="${e(title)}"
+         data-add-org-dept="${e(group)}"`;
+
+    return `
+      <div class="org-position-row">
+        <div>
+          <strong>${e(title)}</strong>
+          ${person ? `<small>(${e(person)})</small>` : ''}
+        </div>
+
+        <button type="button"
+                class="row-action"
+                ${action}>
+          ${saved ? 'عرض الوصف' : 'إضافة وصف'}
+        </button>
+      </div>
+    `;
+  }
+
+  return `
+    <section class="hero">
+      <h2>الهيكلية الإدارية المعتمدة</h2>
+      <p>
+        العام الدراسي 2026–2027،
+        وفق مخطط الهيكلية الإدارية لثانوية الجنان.
+      </p>
+    </section>
+
+    <div class="organization-root">
+      <b>المدير العام</b>
+      <small>د. سالم يكن</small>
+    </div>
+
+    <div class="org-connector"></div>
+
+    <div class="org-grid">
+      ${OFFICIAL_ORG.map(group => `
+        <article class="org-card"
+                 data-theme="${deptTheme(group.group)}">
+
+          <header>
+            <h3>${e(group.title)}</h3>
+            ${group.person ? `<small>${e(group.person)}</small>` : ''}
+          </header>
+
+          <div class="org-roles">
+            ${node(group.title, group.person, group.group)}
+
+            ${group.children.map(([name, person]) =>
+              node(name, person, group.group)
+            ).join('')}
+          </div>
+        </article>
+      `).join('')}
+    </div>
+
+    <p class="note">
+      المسميات والأسماء مأخوذة من مخطط الهيكلية.
+      إضافة وصف وظيفي لا تعني اعتماد مهام
+      أو صلاحيات لم تُقرّها المؤسسة.
+    </p>
+  `;
+}
+
+/* ===== الأوصاف الوظيفية ===== */
+
+function jobsPage() {
+  const available = Object.values(jobs).filter(j => {
+    if (j.deleted) return false;
+
+    if (
+      jobDepartment &&
+      j.department !== jobDepartment
+    ) {
+      return false;
+    }
+
+    const text = [
+      j.title,
+      j.department,
+      j.purpose,
+      j.responsibilities,
+      j.reportsTo
+    ].join(' ').toLowerCase();
+
+    return text.includes(jobSearch.toLowerCase());
+  });
+
+  return `
+    <section class="hero">
+      <h2>بطاقات الوصف الوظيفي</h2>
+      <p>
+        الأوصاف الوظيفية المعتمدة لكل وظيفة
+        في ثانوية الجنان.
+      </p>
+    </section>
+
+    <div class="note">
+      لا يتضمن ملف أعمال المدير العام الأوصاف
+      التفصيلية المعتمدة لجميع الوظائف.
+      تُستكمل هذه البطاقات من الوثائق الرسمية للمؤسسة.
+    </div>
+
+    <div class="button-row">
+      <h2>الوظائف المسجّلة (${available.length})</h2>
+      <button class="primary" data-action="addJob">
+        + إضافة وظيفة ووصفها
+      </button>
+    </div>
+
+    <div class="filters">
+      <input id="jobSearch"
+             placeholder="بحث باسم الوظيفة أو مسؤولياتها"
+             value="${e(jobSearch)}">
+
+      <select id="jobDepartmentFilter">
+        <option value="">جميع الأقسام</option>
+
+        ${departments.map(d => `
+          <option value="${e(d)}"
+                  ${jobDepartment === d ? 'selected' : ''}>
+            ${e(d)}
+          </option>
+        `).join('')}
+      </select>
+    </div>
+
+    ${!available.length
+      ? `<div class="panel">
+           لا توجد بطاقات وصف وظيفي مسجّلة بعد.
+         </div>`
+      : `
+        <div class="job-grid">
+          ${available.map(j => `
+            <article class="job-card"
+                     data-theme="${deptTheme(j.department)}">
+
+              <h3>${e(j.title)}</h3>
+              <div class="muted">${e(j.department)}</div>
+
+              <div class="job-fields">
+                ${[
+                  ['يرفع تقاريره إلى', j.reportsTo],
+                  ['الغاية من الوظيفة', j.purpose],
+                  ['المسؤوليات', j.responsibilities],
+                  ['الصلاحيات', j.authority],
+                  ['المؤهلات', j.qualifications],
+                  ['مؤشرات الأداء', j.kpis]
+                ].filter(([, value]) => value)
+                 .map(([key, value]) => `
+                   <p>
+                     <b>${key}: </b>${e(value)}
+                   </p>
+                 `).join('') || '<p>الوصف لم يُستكمل بعد.</p>'}
+              </div>
+
+              <div class="quick-actions">
+                <button class="row-action"
+                        data-job="${e(j.id)}">
+                  عرض وتعديل
+                </button>
+
+                ${linkButton(j.docUrl, 'الوصف المعتمد')}
+              </div>
+            </article>
+          `).join('')}
+        </div>
+      `}
+  `;
+}
+
+/* ===== إعدادات Google ===== */
+
+function renderSettings() {
+  $('content').innerHTML = `
+    <section class="hero">
+      <h2>الربط مع Google</h2>
+      <p>
+        التقويم والبريد ومشاركة التحديثات
+        عبر Google Sheets.
+      </p>
+    </section>
+
+    <div class="settings">
+      <div class="panel">
+        <h2>إعدادات حساب Google</h2>
+
+        <label>
+          OAuth Web Client ID
+          <input id="clientId"
+                 dir="ltr"
+                 value="${e(config.clientId)}"
+                 placeholder="...apps.googleusercontent.com">
+        </label>
+
+        <label>
+          Calendar ID
+          <input id="calendarId"
+                 dir="ltr"
+                 value="${e(config.calendarId)}">
+        </label>
+
+        <label>
+          اسم المستخدم / المرسل
+          <input id="editorName"
+                 value="${e(config.editorName)}">
+        </label>
+
+        <div class="actions">
+          <button class="primary"
+                  data-action="saveConfig">
+            حفظ الإعدادات
+          </button>
+
+          <button class="outline"
+                  data-action="connectCalendar">
+            ربط Google Calendar
+          </button>
+
+          <button class="outline"
+                  data-action="connectMail">
+            ربط Gmail للإرسال
+          </button>
+        </div>
+
+        <p class="field-hint">
+          فعّل Calendar API وGmail API،
+          واضبط OAuth Web Client في Google Cloud.
+        </p>
+      </div>
+
+      <div class="panel">
+        <h2>مزامنة الأعمال بين الأجهزة</h2>
+
+        <label>
+          Google Spreadsheet ID
+          <input id="sheetId"
+                 dir="ltr"
+                 value="${e(config.sheetId)}">
+        </label>
+
+        <div class="actions">
+          <button class="outline"
+                  data-action="connectSheets">
+            ربط Google Sheets
+          </button>
+
+          <button class="outline"
+                  data-action="syncCloud">
+            مزامنة الآن
+          </button>
+        </div>
+
+        <p class="field-hint">
+          تستخدم المزامنة ورقة Jinan_Updates
+          وتعمل كل 90 ثانية ما دام الحساب
+          متصلاً والتبويب مفتوحاً.
+        </p>
+
+        <div class="note">
+          وقت تسليم التقرير مأخوذ من ساعة جهاز
+          المستخدم، وليس وقت خادم رسمي.
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>النسخ الاحتياطية</h2>
+
+      <div class="actions">
+        <button class="outline"
+                data-action="backup">
+          تنزيل نسخة احتياطية
+        </button>
+
+        <button class="outline"
+                data-action="restore">
+          استيراد نسخة احتياطية
+        </button>
+
+        <button class="outline"
+                data-action="ics">
+          تصدير ICS
+        </button>
+
+        <input id="backupFile"
+               type="file"
+               accept=".json,application/json"
+               hidden>
+      </div>
+
+      <p class="note">
+        لا تستخدم GitHub Pages لحفظ بيانات
+        الطلاب أو الملفات الحساسة بصورة عامة.
+        المزامنة الحالية لا تفرض صلاحيات مختلفة
+        بين المدير والموظف.
+      </p>
+    </div>
+  `;
+}
+
+/* ===== صفحات المنظومة ===== */
 
 function render() {
-  content.dataset.theme =
+  $('content').dataset.theme =
     view === 'department'
-      ? theme(department)
+      ? deptTheme(department)
       : 'neutral';
 
-  el('pageTitle').textContent =
+  $('pageTitle').textContent =
     view === 'department'
       ? department
       : TITLES[view];
 
-  document.querySelectorAll('#menu button')
-    .forEach(button => {
-      button.classList.toggle(
-        'active',
-        button.dataset.view === view
-      );
-    });
+  document.querySelectorAll('#menu button').forEach(b => {
+    b.classList.toggle(
+      'active',
+      b.dataset.view === view
+    );
+  });
 
   if (view === 'dashboard') {
-    content.innerHTML = `
-      <section class="hero">
-        <h2>خطة أعمال المدير العام</h2>
+    const central = tasks.filter(
+      t => t.kind === 'calendar'
+    ).slice(0, 15);
 
+    $('content').innerHTML = `
+      <section class="hero">
+        <h2>لوحة متابعة المدير العام</h2>
         <p>
-          وفق جداول ثانوية الجنان الأصلية،
-          مع مهام المدير والمتابعة والأدلة.
+          الأعمال والتقارير والقرارات
+          والتذكيرات والمراسلات.
         </p>
       </section>
 
-      <div class="note">
-        مواعيد Word محفوظة كما وردت.
-        حدّد التاريخ الكامل في تفاصيل المهمة
-        قبل إضافتها إلى التقويم.
+      <div class="legend">
+        يُسجّل وقت وصول التقرير عند حفظ رابطه
+        لأول مرة. ولا تظهر التغييرات على جهاز آخر
+        إلا بعد مزامنتها مع Google Sheets.
       </div>
 
-      ${counters(tasks)}
+      ${kpis(tasks)}
 
-      <div class="section-title">
+      <div class="button-row">
         <h2>الأقسام الإدارية</h2>
+        <button class="primary" data-action="newTask">
+          + عمل جديد
+        </button>
       </div>
 
       ${cards()}
 
       <div class="section-title">
-        <h2>من الروزنامة المركزية</h2>
+        <h2>عينة من الروزنامة المركزية</h2>
       </div>
 
       <div class="panel">
-        ${table(
-          tasks.filter(t => t.kind === 'calendar')
-            .slice(0, 15)
-        )}
+        ${table(central)}
       </div>
     `;
 
+  } else if (view === 'organization') {
+    $('content').innerHTML = organization();
+
   } else if (view === 'departments') {
-    content.innerHTML = `
+    $('content').innerHTML = `
       <section class="hero">
         <h2>الأقسام الإدارية</h2>
-        <p>
-          اختر القسم للانتقال إلى أعماله
-          السنوية والثابتة.
-        </p>
+        <p>الأعمال والتقارير بحسب كل قسم.</p>
       </section>
+
+      <div class="button-row">
+        <h2>أقسام المؤسسة</h2>
+        <button class="primary" data-action="newTask">
+          + عمل جديد
+        </button>
+      </div>
 
       ${cards()}
     `;
 
-  } else if (view === 'department') {
-    const list = baseList();
+  } else if (view === 'jobs') {
+    $('content').innerHTML = jobsPage();
 
-    content.innerHTML = `
+  } else if (view === 'department') {
+    const list = mainList();
+
+    $('content').innerHTML = `
       <section class="hero">
         <h2>${e(department)}</h2>
-        <p>
-          الأعمال، المسؤولون، المواعيد،
-          والتقارير المطلوبة.
-        </p>
+        <p>الاستحقاقات والتقارير وقرارات المدير.</p>
       </section>
 
-      ${counters(list)}
+      ${kpis(list)}
+
+      <div class="button-row">
+        <h2>سجل أعمال القسم</h2>
+
+        <button class="primary" data-action="newTask">
+          + إضافة عمل لهذا القسم
+        </button>
+      </div>
+
       ${taskArea(list, true)}
     `;
 
   } else if (view === 'calendar') {
-    content.innerHTML = `
+    $('content').innerHTML = `
       <div class="panel">
-        <p>
-          الروزنامة المركزية
-          (69 بنداً كما في Word).
-        </p>
-
-        <button
-          class="outline"
-          data-action="ics">
-          تصدير المواعيد المؤرّخة ICS
-        </button>
+        <div class="actions">
+          <button class="outline" data-action="ics">
+            تصدير المواعيد المؤرّخة ICS
+          </button>
+        </div>
 
         <div class="months">
-
-          <button
-            data-month=""
-            class="${!month ? 'active' : ''}">
+          <button data-month=""
+                  class="${!month ? 'active' : ''}">
             كل الأشهر
           </button>
 
           ${MONTHS.map(m => `
-            <button
-              data-month="${e(m)}"
-              class="${m === month ? 'active' : ''}">
+            <button data-month="${e(m)}"
+                    class="${month === m ? 'active' : ''}">
               ${e(m)}
             </button>
           `).join('')}
-
         </div>
       </div>
 
-      ${taskArea(baseList())}
+      ${taskArea(mainList())}
     `;
 
-  } else if (
-    view === 'routine' ||
-    view === 'government'
-  ) {
-    content.innerHTML = `
+  } else if (view === 'routine' ||
+             view === 'government') {
+    $('content').innerHTML = `
       <section class="hero">
-        <h2>${e(TITLES[view])}</h2>
+        <h2>${TITLES[view]}</h2>
       </section>
 
-      ${counters(baseList())}
-      ${taskArea(baseList())}
+      ${kpis(mainList())}
+      ${taskArea(mainList())}
     `;
 
   } else if (view === 'settings') {
@@ -1066,179 +1107,793 @@ function render() {
   }
 }
 
-// =======================================
-// نافذة تفاصيل المهمة
-// =======================================
+function navigate(target) {
+  view = target;
+  search = '';
+  tab = 'all';
+  statusFilter = '';
+  render();
+}
+
+/* ===== نافذة تفاصيل المهمة ===== */
 
 function openTask(id) {
-  selected = byId(id);
+  selectedTask = byId(id);
+  if (!selectedTask) return;
 
-  if (!selected) return;
+  const t = task(selectedTask);
+  const dlg = $('taskDialog');
 
-  const t = current(selected);
+  dlg.dataset.theme = deptTheme(t.department);
+  $('taskTitle').textContent = t.title;
 
-  dialog.dataset.theme = theme(t.department);
-
-  el('taskTitle').textContent = t.title;
-
-  const fields = [
+  const details = [
     ['القسم', t.department],
-    ['جدول Word', t.section],
-    ['التصنيف', t.frequency],
-    ['الفترة/الموعد الأصلي', t.deadlineText],
-    ['تفاصيل العمل', t.description],
+    ['نوع العمل', t.section || KIND_LABEL[t.kind]],
+    ['الاستحقاق كما ورد في Word', t.deadlineText],
+    ['تفاصيل المطلوب', t.description],
     ['مصادر المعلومات والأدلة', t.evidence],
-    ['المسؤولون', t.sourceAssignee],
-    ['مهام المدير', t.managerAction],
+    ['المسؤولون وفق Word', t.sourceAssignee],
+    ['دور المدير الأصلي', t.managerAction],
     ['المتابعة اللاحقة', t.followUp],
-    ['مرجع Word', t.reference]
+    ['المرجع', t.reference]
   ];
 
-  el('taskInfo').innerHTML = fields
+  $('taskInfo').innerHTML = details
     .filter(([, value]) => value)
-    .map(([key, value]) => `
+    .map(([label, value]) => `
       <div>
-        <b>${e(key)}:</b>
+        <b>${e(label)}:</b>
         ${e(value)}
       </div>
     `).join('');
 
-  const inputs = [
+  const fields = [
     ['taskStatus', 'status'],
     ['taskAssignee', 'assignee'],
     ['taskDate', 'date'],
-    ['taskReceived', 'receivedAt'],
+    ['taskProof', 'proofUrl'],
+    ['submittedBy', 'submittedBy'],
     ['taskDecision', 'decision'],
     ['taskNotes', 'notes'],
-    ['taskProof', 'proofUrl']
+    ['recipientEmail', 'recipientEmail']
   ];
 
-  for (const [id, key] of inputs) {
-    el(id).value = t[key] || '';
-  }
+  fields.forEach(([element, key]) => {
+    $(element).value = t[key] || '';
+  });
 
-  dialog.showModal();
+  $('reminderMinutes').value =
+    String(t.reminderMinutes || 1440);
+
+  $('editCustomTask').hidden =
+    !customTasks[t.id] || customTasks[t.id].deleted;
+
+  $('taskReceivedAt').value =
+    t.receivedAt ? stampView(t.receivedAt) : '';
+
+  $('reportLinkBox').innerHTML =
+    t.proofUrl && safeUrl(t.proofUrl)
+      ? `<div class="report-box">
+           التقرير المسلّم:
+           ${linkButton(t.proofUrl, 'فتح رابط التقرير')}
+           · ${e(stampView(t.receivedAt))}
+         </div>`
+      : '';
+
+  $('emailAudit').textContent =
+    t.commentSentAt
+      ? `آخر تعليق أُرسل إلى ${t.commentSentTo || '—'}
+         بتاريخ ${stampView(t.commentSentAt)}`
+      : 'لم يُرسل تعليق بالبريد بعد.';
+
+  dlg.showModal();
 }
 
-function saveTask() {
-  if (!selected) return false;
+/* ===== حفظ التعديلات ===== */
 
-  const change = {
-    ...(changes[selected.id] || {}),
+function persist(type, id, value) {
+  const key = type === 'task_change'
+    ? STORE
+    : type === 'custom_task'
+      ? EXTRA_STORE
+      : JOB_STORE;
 
-    status: el('taskStatus').value,
-    assignee: el('taskAssignee').value.trim(),
-    date: el('taskDate').value,
-    receivedAt: el('taskReceived').value,
-    decision: el('taskDecision').value.trim(),
-    notes: el('taskNotes').value.trim(),
-    proofUrl: el('taskProof').value.trim(),
-    updatedAt: new Date().toISOString()
-  };
+  const target = type === 'task_change'
+    ? changes
+    : type === 'custom_task'
+      ? customTasks
+      : jobs;
 
-  if (
-    change.proofUrl &&
-    !change.proofUrl.startsWith('https://')
-  ) {
-    notice('يجب أن يبدأ الرابط بـ https://');
+  const next = {...target, [id]: value};
+
+  if (!saveLocal(key, next)) {
+    notify('تعذّر الحفظ في المتصفح', true);
     return false;
   }
 
-  const next = {
-    ...changes,
-    [selected.id]: change
-  };
-
-  if (!save(STORE, next)) {
-    notice('تعذّر حفظ التعديلات في المتصفح');
-    return false;
+  if (type === 'task_change') {
+    changes = next;
+  } else if (type === 'custom_task') {
+    customTasks = next;
+    buildTasks();
+  } else {
+    jobs = next;
   }
 
-  changes = next;
-  render();
+  const event = {
+    timestamp: stamp(),
+    type,
+    id,
+    payload: value,
+    editor: config.editorName || ''
+  };
+
+  pending = [...pending, event];
+  saveLocal(PENDING_STORE, pending);
+
+  indicator(
+    `بانتظار مزامنة (${pending.length})`,
+    'warn'
+  );
+
+  if (canUseScope(SCOPE.sheets) && config.sheetId) {
+    void syncCloud({
+      silent: true,
+      interactive: false
+    });
+  }
 
   return true;
 }
 
-// =======================================
-// النسخ الاحتياطي
-// =======================================
+function saveTask() {
+  if (!selectedTask) return false;
 
-function download(name, data, type) {
-  const blob = URL.createObjectURL(
-    new Blob([data], {type})
-  );
+  const original = task(selectedTask);
+  const id = selectedTask.id;
 
+  const link = $('taskProof').value.trim();
+  const email = $('recipientEmail').value.trim();
+
+  if (link && !safeUrl(link)) {
+    notify('يجب أن يبدأ رابط التقرير بـ https://', true);
+    return false;
+  }
+
+  if (email && !validEmail(email)) {
+    notify('صيغة البريد الإلكتروني غير صحيحة', true);
+    return false;
+  }
+
+  const updated = {
+    ...(changes[id] || {}),
+    status: $('taskStatus').value,
+    assignee: $('taskAssignee').value.trim(),
+    date: $('taskDate').value,
+    reminderMinutes: Number($('reminderMinutes').value),
+    proofUrl: link,
+    submittedBy: $('submittedBy').value.trim(),
+    recipientEmail: email,
+    decision: $('taskDecision').value.trim(),
+    notes: $('taskNotes').value.trim(),
+    updatedAt: stamp()
+  };
+
+  if (!original.receivedAt && link) {
+    updated.receivedAt = stamp();
+
+    if (updated.status === 'لم يُستلم') {
+      updated.status = 'تم الاستلام';
+    }
+
+  } else if (original.receivedAt) {
+    updated.receivedAt = original.receivedAt;
+  }
+
+  if (!persist('task_change', id, updated)) {
+    return false;
+  }
+
+  $('taskReceivedAt').value =
+    updated.receivedAt
+      ? stampView(updated.receivedAt)
+      : '';
+
+  render();
+  return true;
+}
+
+/* ===== إضافة أعمال جديدة ===== */
+
+function openNewTask(id = null, preset = '') {
+  editingTaskId = id;
+  const old = id ? customTasks[id] : null;
+
+  $('customTaskHeading').textContent =
+    old ? 'تعديل العمل الإضافي' : 'إضافة عمل جديد';
+
+  $('newDepartment').innerHTML = departments.map(d => `
+    <option value="${e(d)}">${e(d)}</option>
+  `).join('');
+
+  $('newTitle').value = old?.title || '';
+
+  $('newDepartment').value =
+    old?.department || preset || department || departments[0];
+
+  $('newKind').value = old?.kind || 'plan';
+  $('newDeadline').value = old?.deadlineText || '';
+  $('newDate').value = old?.date || '';
+  $('newEvidence').value = old?.evidence || '';
+  $('newAssignee').value = old?.sourceAssignee || '';
+  $('newManagerAction').value = old?.managerAction || '';
+  $('newFollowUp').value = old?.followUp || '';
+
+  $('deleteCustomTask').hidden = !old;
+  $('customTaskDialog').showModal();
+}
+
+function saveCustomTask() {
+  const title = $('newTitle').value.trim();
+
+  if (!title) {
+    notify('عنوان العمل مطلوب', true);
+    return false;
+  }
+
+  const previous = editingTaskId
+    ? customTasks[editingTaskId]
+    : null;
+
+  const id = editingTaskId ||
+    `CUSTOM-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  const kind = $('newKind').value;
+
+  const record = {
+    ...previous,
+    id,
+    kind,
+    department: $('newDepartment').value,
+    section: 'أعمال أضيفت إلى المنظومة',
+    title,
+    frequency: KIND_LABEL[kind],
+    deadlineText: $('newDeadline').value.trim(),
+    date: $('newDate').value,
+    evidence: $('newEvidence').value.trim(),
+    sourceAssignee: $('newAssignee').value.trim(),
+    managerAction: $('newManagerAction').value.trim(),
+    followUp: $('newFollowUp').value.trim(),
+    status: previous?.status || 'لم يُستلم',
+    reference: 'إضافة إلكترونية — خارج ملف Word الأصلي',
+    createdAt: previous?.createdAt || stamp(),
+    updatedAt: stamp(),
+    deleted: false
+  };
+
+  return persist('custom_task', id, record);
+}
+
+function deleteCustomTask() {
+  if (!editingTaskId ||
+      !customTasks[editingTaskId]) return;
+
+  if (!confirm('حذف هذا العمل المضاف؟')) return;
+
+  const id = editingTaskId;
+  const old = customTasks[id];
+
+  if (persist('custom_task', id, {
+    ...old,
+    deleted: true,
+    updatedAt: stamp()
+  })) {
+    $('customTaskDialog').close();
+    render();
+    notify('تم إلغاء العمل الإضافي');
+  }
+}
+
+/* ===== إضافة الأوصاف الوظيفية ===== */
+
+function openJob(id = null, preset = '', proposedTitle = '') {
+  editingJobId = id;
+
+  const old = id ? jobs[id] : null;
+
+  $('jobHeading').textContent =
+    old ? 'تعديل الوصف الوظيفي' : 'إضافة وصف وظيفي';
+
+  $('jobDepartment').innerHTML = departments.map(d => `
+    <option value="${e(d)}">${e(d)}</option>
+  `).join('');
+
+  const fields = {
+    jobTitle: 'title',
+    jobReportsTo: 'reportsTo',
+    jobPurpose: 'purpose',
+    jobResponsibilities: 'responsibilities',
+    jobAuthority: 'authority',
+    jobQualifications: 'qualifications',
+    jobKpis: 'kpis',
+    jobDocUrl: 'docUrl'
+  };
+
+  Object.entries(fields).forEach(([element, key]) => {
+    $(element).value = old?.[key] || '';
+  });
+
+  $('jobDepartment').value =
+    old?.department || preset || departments[0];
+
+  if (!old && proposedTitle) {
+    $('jobTitle').value = proposedTitle;
+  }
+
+  $('deleteJob').hidden = !old;
+  $('jobDialog').showModal();
+}
+
+function saveJob() {
+  const title = $('jobTitle').value.trim();
+  const docUrl = $('jobDocUrl').value.trim();
+
+  if (!title) {
+    notify('المسمى الوظيفي مطلوب', true);
+    return false;
+  }
+
+  if (docUrl && !safeUrl(docUrl)) {
+    notify('رابط الوصف الوظيفي يجب أن يبدأ بـ https://', true);
+    return false;
+  }
+
+  const old = editingJobId ? jobs[editingJobId] : null;
+
+  const id = editingJobId ||
+    `ROLE-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  const record = {
+    ...old,
+    id,
+    title,
+    department: $('jobDepartment').value,
+    reportsTo: $('jobReportsTo').value.trim(),
+    purpose: $('jobPurpose').value.trim(),
+    responsibilities: $('jobResponsibilities').value.trim(),
+    authority: $('jobAuthority').value.trim(),
+    qualifications: $('jobQualifications').value.trim(),
+    kpis: $('jobKpis').value.trim(),
+    docUrl,
+    updatedAt: stamp(),
+    createdAt: old?.createdAt || stamp(),
+    deleted: false
+  };
+
+  return persist('job', id, record);
+}
+
+function deleteJob() {
+  if (!editingJobId || !jobs[editingJobId]) return;
+  if (!confirm('هل تريد حذف بطاقة الوصف الوظيفي؟')) return;
+
+  const id = editingJobId;
+
+  if (persist('job', id, {
+    ...jobs[id],
+    deleted: true,
+    updatedAt: stamp()
+  })) {
+    $('jobDialog').close();
+    render();
+    notify('حُذفت البطاقة');
+  }
+}
+
+/* ===== النسخ الاحتياطية ===== */
+
+function download(name, text, mime) {
   const a = document.createElement('a');
 
-  a.href = blob;
+  const url = URL.createObjectURL(
+    new Blob([text], {type: mime})
+  );
+
+  a.href = url;
   a.download = name;
   a.click();
 
-  setTimeout(() => {
-    URL.revokeObjectURL(blob);
-  }, 1000);
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
 }
 
 function backup() {
   download(
-    'jinan-backup.json',
+    'jinan-director-backup-v3.json',
     JSON.stringify({
       changes,
-      googleConfig,
-      createdAt: new Date().toISOString()
+      customTasks,
+      jobs,
+      pending,
+      config,
+      exportedAt: stamp()
     }, null, 2),
     'application/json'
   );
 }
 
-async function importBackup(file) {
+async function restore(file) {
   if (!file) return;
 
   try {
-    const data = JSON.parse(
-      await file.text()
-    );
+    const data = JSON.parse(await file.text());
 
     if (
       !data.changes ||
       typeof data.changes !== 'object'
     ) {
-      throw Error('الملف غير صالح');
+      throw Error('نسخة احتياطية غير صحيحة');
     }
 
-    const ids = new Set(
-      tasks.map(t => t.id)
-    );
+    if (!confirm(
+      'استيراد النسخة سيستبدل المعلومات المحلية الحالية. متابعة؟'
+    )) return;
 
-    changes = Object.fromEntries(
-      Object.entries(data.changes)
-        .filter(([id]) => ids.has(id))
-    );
+    changes = data.changes;
+    customTasks = data.customTasks || {};
+    jobs = data.jobs || {};
+    pending = data.pending || [];
 
-    if (!save(STORE, changes)) {
-      throw Error('تعذّر حفظ التعديلات');
+    const saved = [
+      saveLocal(STORE, changes),
+      saveLocal(EXTRA_STORE, customTasks),
+      saveLocal(JOB_STORE, jobs),
+      saveLocal(PENDING_STORE, pending)
+    ];
+
+    if (!saved.every(Boolean)) {
+      throw Error('تعذّر حفظ جزء من النسخة المستوردة');
     }
 
+    buildTasks();
     render();
-    notice('تم استيراد النسخة الاحتياطية');
+
+    notify('استُعيدت النسخة الاحتياطية محلياً');
 
   } catch (err) {
-    notice(err.message);
+    notify(err.message, true);
   }
 }
 
-// =======================================
-// فتح المهمة في Google Calendar
-// =======================================
+function exportIcs() {
+  const esc = s => String(s || '')
+    .replaceAll('\\', '\\\\')
+    .replaceAll(',', '\\,')
+    .replaceAll(';', '\\;')
+    .replaceAll('\n', '\\n');
 
-function draftCalendar() {
-  if (!saveTask()) return;
+  const out = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//Al Jinan High School//Management//AR',
+    'CALSCALE:GREGORIAN'
+  ];
 
-  const t = current(selected);
+  for (const original of tasks) {
+    const t = task(original);
+    if (!t.date) continue;
+
+    const a = t.date.replaceAll('-', '');
+
+    const b = new Date(
+      Date.parse(t.date + 'T00:00:00Z') + 86400000
+    ).toISOString().slice(0, 10).replaceAll('-', '');
+
+    out.push(
+      'BEGIN:VEVENT',
+      `UID:${t.id}@jinan-management`,
+      `DTSTAMP:${stamp()
+        .replace(/[-:]/g, '')
+        .replace(/\.\d{3}Z$/, 'Z')}`,
+      `DTSTART;VALUE=DATE:${a}`,
+      `DTEND;VALUE=DATE:${b}`,
+      `SUMMARY:${esc(t.title)}`,
+      `DESCRIPTION:${esc(t.department)}`,
+      'END:VEVENT'
+    );
+  }
+
+  out.push('END:VCALENDAR');
+
+  download(
+    'jinan-calendar.ics',
+    out.join('\r\n'),
+    'text/calendar;charset=utf-8'
+  );
+}
+
+/* ===== Google OAuth ===== */
+
+function canUseScope(scope) {
+  return Boolean(
+    oauthToken &&
+    Date.now() < tokenExpires - 45000 &&
+    oauthGranted.has(scope)
+  );
+}
+
+async function tokenFor(scope, interactive = true) {
+  if (canUseScope(scope)) return oauthToken;
+
+  if (!interactive) {
+    throw Error('اتصال Google يحتاج إعادة تفويض');
+  }
+
+  if (!config.clientId) {
+    throw Error('أضف OAuth Client ID في الإعدادات أولاً');
+  }
+
+  if (!window.google?.accounts?.oauth2) {
+    throw Error('مكتبة Google غير متاحة');
+  }
+
+  return new Promise((resolve, reject) => {
+    const client = google.accounts.oauth2.initTokenClient({
+      client_id: config.clientId,
+      scope,
+      include_granted_scopes: true,
+
+      callback: result => {
+        if (result.error) {
+          reject(Error(result.error));
+          return;
+        }
+
+        oauthToken = result.access_token;
+
+        tokenExpires =
+          Date.now() +
+          Number(result.expires_in || 3600) * 1000;
+
+        oauthGranted = new Set(
+          String(result.scope || scope)
+            .split(/\s+/)
+            .filter(Boolean)
+        );
+
+        resolve(oauthToken);
+      },
+
+      error_callback: result => {
+        reject(
+          Error(
+            result.message || 'لم تكتمل موافقة Google'
+          )
+        );
+      }
+    });
+
+    client.requestAccessToken();
+  });
+}
+
+async function googleApi(
+  url,
+  method = 'GET',
+  body,
+  scope = SCOPE.calendar,
+  interactive = true
+) {
+  const accessToken = await tokenFor(scope, interactive);
+
+  const response = await fetch(url, {
+    method,
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      ...(body !== undefined
+        ? {'Content-Type': 'application/json'}
+        : {})
+    },
+    ...(body !== undefined
+      ? {body: JSON.stringify(body)}
+      : {})
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    const error = Error(
+      data.error?.message ||
+      `فشل Google API: HTTP ${response.status}`
+    );
+
+    error.status = response.status;
+    throw error;
+  }
+
+  return data;
+}
+
+function saveConfig() {
+  config = {
+    clientId: $('clientId').value.trim(),
+    calendarId: $('calendarId').value.trim() || 'primary',
+    sheetId: $('sheetId').value.trim(),
+    editorName: $('editorName').value.trim()
+  };
+
+  if (!saveLocal(CONFIG_STORE, config)) {
+    notify('تعذّر حفظ الإعدادات', true);
+    return;
+  }
+
+  oauthToken = '';
+  oauthGranted = new Set();
+
+  indicator('إعدادات محفوظة محلياً');
+  notify('تم حفظ الإعدادات. اربط خدمات Google المطلوبة.');
+}
+
+async function connectGoogle(scope, label) {
+  try {
+    await tokenFor(scope);
+    notify(`تم السماح باستخدام ${label}`);
+
+    if (scope === SCOPE.sheets) {
+      await syncCloud({
+        silent: false,
+        interactive: false
+      });
+    }
+
+  } catch (err) {
+    notify(err.message, true);
+  }
+}
+
+/* =====================================
+   Google Calendar - زر ذكّرني
+   ===================================== */
+
+async function remindTask(id) {
+  const source = byId(id);
+  if (!source) return;
+
+  const t = task(source);
 
   if (!t.date) {
-    notice('حدّد تاريخاً أولاً');
+    openTask(id);
+    $('taskDate').focus();
+
+    notify(
+      'أدخل تاريخ الاستحقاق أولاً ثم اضغط ذكّرني',
+      true
+    );
+    return;
+  }
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(t.date)) {
+    notify('صيغة الموعد غير صحيحة', true);
+    return;
+  }
+
+  try {
+    const end = new Date(
+      Date.parse(t.date + 'T00:00:00Z') + 86400000
+    ).toISOString().slice(0, 10);
+
+    const base =
+      'https://www.googleapis.com/calendar/v3/calendars/' +
+      encodeURIComponent(config.calendarId || 'primary') +
+      '/events';
+
+    const minutes = Number(t.reminderMinutes || 1440);
+
+    const body = {
+      summary: 'متابعة: ' + t.title,
+
+      description: [
+        `القسم: ${t.department}`,
+        `رقم العمل: ${t.id}`,
+        `المسؤول: ${t.assignee || t.sourceAssignee || ''}`,
+        `مطلوب من المدير: ${t.managerAction || ''}`
+      ].join('\n'),
+
+      start: {date: t.date},
+      end: {date: end},
+
+      reminders: {
+        useDefault: false,
+        overrides: [
+          {method: 'popup', minutes},
+          {method: 'email', minutes}
+        ]
+      }
+    };
+
+    let event;
+
+    if (t.calendarEventId) {
+      try {
+        event = await googleApi(
+          `${base}/${encodeURIComponent(t.calendarEventId)}`,
+          'PUT',
+          body,
+          SCOPE.calendar
+        );
+
+      } catch (err) {
+        if (err.status !== 404) throw err;
+
+        event = await googleApi(
+          base,
+          'POST',
+          body,
+          SCOPE.calendar
+        );
+      }
+
+    } else {
+      event = await googleApi(
+        base,
+        'POST',
+        body,
+        SCOPE.calendar
+      );
+    }
+
+    const next = {
+      ...(changes[t.id] || {}),
+      calendarEventId: event.id,
+      calendarLink: event.htmlLink || '',
+      updatedAt: stamp()
+    };
+
+    if (!persist('task_change', t.id, next)) {
+      notify(
+        'أُنشئ التذكير، لكن تعذّر حفظ مرجعه محلياً',
+        true
+      );
+      return;
+    }
+
+    notify('تم حفظ التذكير في Google Calendar');
+
+    if ($('taskDialog').open) {
+      openTaskAgain(t.id);
+    }
+
+    render();
+
+  } catch (err) {
+    notify(
+      'تعذّر إنشاء التذكير: ' + err.message,
+      true
+    );
+  }
+}
+
+function openTaskAgain(id) {
+  if ($('taskDialog').open) {
+    $('taskDialog').close();
+  }
+
+  openTask(id);
+}
+
+async function remindFromDialog() {
+  if (!selectedTask || !saveTask()) return;
+
+  await remindTask(selectedTask.id);
+}
+
+function calendarDraft() {
+  if (!selectedTask || !saveTask()) return;
+
+  const t = task(selectedTask);
+
+  if (!t.date) {
+    notify('حدّد موعد المهمة أولاً', true);
     return;
   }
 
@@ -1250,7 +1905,7 @@ function draftCalendar() {
 
   const params = new URLSearchParams({
     action: 'TEMPLATE',
-    text: t.title,
+    text: 'متابعة: ' + t.title,
     dates: `${from}/${to}`,
 
     details:
@@ -1266,812 +1921,699 @@ function draftCalendar() {
   );
 }
 
-// =======================================
-// تصدير مواعيد ICS
-// =======================================
+/* =====================================
+   Gmail - إرسال تعليق المدير
+   ===================================== */
 
-function exportICS() {
-  const clean = s => String(s || '')
-    .replaceAll('\\', '\\\\')
-    .replaceAll(',', '\\,')
-    .replaceAll(';', '\\;')
-    .replaceAll('\n', '\\n');
+function base64UrlUtf8(text) {
+  const bytes = new TextEncoder().encode(String(text));
 
-  const output = [
-    'BEGIN:VCALENDAR',
-    'VERSION:2.0',
-    'PRODID:-//Al Jinan High School//AR',
-    'CALSCALE:GREGORIAN'
-  ];
+  let result = '';
 
-  for (const source of tasks) {
-    const t = current(source);
-
-    if (!t.date) continue;
-
-    const a = t.date.replaceAll('-', '');
-
-    const b = new Date(
-      Date.parse(t.date + 'T00:00:00Z') + 86400000
-    ).toISOString().slice(0, 10).replaceAll('-', '');
-
-    output.push(
-      'BEGIN:VEVENT',
-
-      `UID:${t.id}@jinan-management`,
-
-      `DTSTAMP:${new Date().toISOString()
-        .replace(/[-:]/g, '')
-        .replace(/\.\d{3}Z$/, 'Z')}`,
-
-      `DTSTART;VALUE=DATE:${a}`,
-      `DTEND;VALUE=DATE:${b}`,
-
-      `SUMMARY:${clean(t.title)}`,
-      `DESCRIPTION:${clean(t.department)}`,
-
-      'END:VEVENT'
+  for (let i = 0; i < bytes.length; i += 8192) {
+    result += String.fromCharCode(
+      ...bytes.subarray(i, i + 8192)
     );
   }
 
-  output.push('END:VCALENDAR');
+  return btoa(result)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
 
-  download(
-    'jinan-calendar.ics',
-    output.join('\r\n'),
-    'text/calendar;charset=utf-8'
+async function sendCommentEmail() {
+  if (!selectedTask) return;
+
+  const recipient = $('recipientEmail').value.trim();
+  const decision = $('taskDecision').value.trim();
+
+  if (!validEmail(recipient)) {
+    notify('أدخل بريداً إلكترونياً صحيحاً', true);
+    return;
+  }
+
+  if (!decision) {
+    notify('اكتب تعليق المدير أولاً', true);
+    return;
+  }
+
+  const approved = confirm(
+    `إرسال تعليق المدير إلى ${recipient} عبر Gmail؟`
   );
-}
 
-// =======================================
-// إعدادات Google
-// =======================================
+  if (!approved) return;
+  if (!saveTask()) return;
 
-function renderSettings() {
-  content.innerHTML = `
-    <div class="settings">
+  const t = task(selectedTask);
 
-      <div class="panel">
+  const subject = `تعليق المدير على تقرير: ${t.title}`;
 
-        <h2>Google Calendar</h2>
+  const body = [
+    'ثانوية الجنان — متابعة أعمال الإدارة',
+    '',
+    `العمل: ${t.title}`,
+    `القسم: ${t.department}`,
+    `رقم المتابعة: ${t.id}`,
+    '',
+    'تعليق / قرار المدير:',
+    decision,
+    '',
+    t.proofUrl ? `رابط التقرير: ${t.proofUrl}` : '',
+    '',
+    'هذه الرسالة صادرة من منظومة متابعة المدير العام.'
+  ].join('\r\n');
 
-        <label>
-          OAuth Client ID
-          <input
-            id="clientId"
-            value="${e(googleConfig.clientId)}">
-        </label>
+  const toMimeBase64 = text => {
+    const base = base64UrlUtf8(text)
+      .replace(/-/g, '+')
+      .replace(/_/g, '/');
 
-        <label>
-          Calendar ID
-          <input
-            id="calendarId"
-            value="${e(googleConfig.calendarId)}">
-        </label>
-
-        <div class="actions">
-          <button
-            class="primary"
-            data-action="saveGoogle">
-            حفظ الإعدادات
-          </button>
-
-          <button
-            class="outline"
-            data-action="connectGoogle">
-            توصيل Google
-          </button>
-        </div>
-
-        <p class="note">
-          فعّل Calendar API وOAuth Web Client،
-          وأضف عنوان GitHub Pages إلى
-          Authorized JavaScript origins.
-          لا تضع Client Secret هنا.
-        </p>
-
-      </div>
-
-      <div class="panel">
-
-        <h2>Google Sheets</h2>
-
-        <label>
-          Spreadsheet ID
-          <input
-            id="sheetId"
-            value="${e(googleConfig.sheetId)}">
-        </label>
-
-        <div class="actions">
-
-          <button
-            class="outline"
-            data-action="pushSheet">
-            رفع التعديلات
-          </button>
-
-          <button
-            class="outline"
-            data-action="pullSheet">
-            استيراد التعديلات
-          </button>
-
-        </div>
-
-        <p>
-          يجب تفعيل Google Sheets API.
-          المزامنة يدوية.
-        </p>
-
-      </div>
-    </div>
-
-    <div class="panel">
-
-      <h2>النسخ الاحتياطي</h2>
-
-      <button
-        class="outline"
-        data-action="backup">
-        تنزيل نسخة احتياطية
-      </button>
-
-      <button
-        class="outline"
-        data-action="restore">
-        استيراد نسخة احتياطية
-      </button>
-
-      <button
-        class="outline"
-        data-action="ics">
-        ملف ICS
-      </button>
-
-      <input
-        id="backupFile"
-        type="file"
-        accept=".json,application/json"
-        hidden>
-
-      <p class="note">
-        GitHub Pages عام.
-        لا تنشر بيانات الطلاب والموظفين الخاصة.
-        الحفظ المحلي ليس نظام صلاحيات مشتركة.
-      </p>
-
-    </div>
-  `;
-}
-
-function saveGoogle() {
-  googleConfig = {
-    clientId: el('clientId').value.trim(),
-    calendarId:
-      el('calendarId').value.trim() || 'primary',
-    sheetId: el('sheetId').value.trim()
-  };
-
-  if (!save(GOOGLE_STORE, googleConfig)) {
-    notice('تعذّر حفظ الإعدادات');
-    return;
-  }
-
-  accessToken = '';
-
-  notice('تم حفظ إعدادات Google');
-}
-
-// =======================================
-// Google OAuth
-// =======================================
-
-function scopes() {
-  return [
-    'https://www.googleapis.com/auth/calendar.events',
-
-    ...(googleConfig.sheetId
-      ? ['https://www.googleapis.com/auth/spreadsheets']
-      : [])
-  ].join(' ');
-}
-
-async function googleToken() {
-  if (!googleConfig.clientId) {
-    throw Error('أدخل Client ID');
-  }
-
-  if (!window.google?.accounts?.oauth2) {
-    throw Error('مكتبة Google غير متاحة');
-  }
-
-  const scope = scopes();
-
-  if (
-    accessToken &&
-    Date.now() < tokenExpiry - 60000 &&
-    scope === tokenScope
-  ) {
-    return accessToken;
-  }
-
-  return new Promise((resolve, reject) => {
-    const client =
-      google.accounts.oauth2.initTokenClient({
-        client_id: googleConfig.clientId,
-        scope,
-
-        callback: result => {
-          if (result.error) {
-            reject(Error(result.error));
-            return;
-          }
-
-          accessToken = result.access_token;
-
-          tokenExpiry =
-            Date.now() +
-            Number(result.expires_in || 3600) * 1000;
-
-          tokenScope = scope;
-
-          resolve(accessToken);
-        },
-
-        error_callback: err => {
-          reject(
-            Error(err.message || 'فشل الاتصال')
-          );
-        }
-      });
-
-    client.requestAccessToken();
-  });
-}
-
-async function googleRequest(
-  url,
-  method = 'GET',
-  body
-) {
-  const token = await googleToken();
-
-  const response = await fetch(url, {
-    method,
-
-    headers: {
-      Authorization: `Bearer ${token}`,
-
-      ...(body
-        ? {'Content-Type': 'application/json'}
-        : {})
-    },
-
-    ...(body
-      ? {body: JSON.stringify(body)}
-      : {})
-  });
-
-  const result = await response.json()
-    .catch(() => ({}));
-
-  if (!response.ok) {
-    throw Error(
-      result.error?.message ||
-      'فشل اتصال Google'
+    return base.padEnd(
+      Math.ceil(base.length / 4) * 4,
+      '='
     );
-  }
-
-  return result;
-}
-
-// =======================================
-// المزامنة المباشرة مع Google Calendar
-// =======================================
-
-async function syncCalendar() {
-  if (!selected || !saveTask()) return;
-
-  const t = current(selected);
-
-  if (!t.date) {
-    notice('حدّد تاريخ المهمة');
-    return;
-  }
-
-  const base =
-    'https://www.googleapis.com/calendar/v3/calendars/' +
-    encodeURIComponent(
-      googleConfig.calendarId || 'primary'
-    ) +
-    '/events';
-
-  const next = new Date(
-    Date.parse(t.date + 'T00:00:00Z') + 86400000
-  ).toISOString().slice(0, 10);
-
-  const body = {
-    summary: t.title,
-
-    description:
-      `القسم: ${t.department}\n` +
-      `المسؤول: ${t.assignee || t.sourceAssignee || ''}\n` +
-      `دور المدير: ${t.managerAction || ''}`,
-
-    start: {date: t.date},
-    end: {date: next},
-
-    reminders: {
-      useDefault: false,
-      overrides: [
-        {method: 'popup', minutes: 1440}
-      ]
-    }
   };
+
+  const encodedSubject = toMimeBase64(subject);
+
+  const encodedBody = toMimeBase64(body)
+    .match(/.{1,76}/g)
+    .join('\r\n');
+
+  const mime = [
+    `To: ${recipient}`,
+    `Subject: =?UTF-8?B?${encodedSubject}?=`,
+    'MIME-Version: 1.0',
+    'Content-Type: text/plain; charset=UTF-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    encodedBody
+  ].join('\r\n');
 
   try {
-    const eventId =
-      changes[t.id]?.calendarEventId;
+    const result = await googleApi(
+      'https://gmail.googleapis.com/gmail/v1/users/me/messages/send',
+      'POST',
+      {
+        raw: base64UrlUtf8(mime)
+      },
+      SCOPE.gmail
+    );
 
-    let event;
-
-    if (eventId) {
-      try {
-        event = await googleRequest(
-          base + '/' + encodeURIComponent(eventId),
-          'PUT',
-          body
-        );
-
-      } catch (err) {
-        if (!/404|not found/i.test(err.message)) {
-          throw err;
-        }
-
-        event = await googleRequest(
-          base,
-          'POST',
-          body
-        );
-      }
-
-    } else {
-      event = await googleRequest(
-        base,
-        'POST',
-        body
-      );
-    }
-
-    changes[t.id] = {
-      ...changes[t.id],
-      calendarEventId: event.id,
-      updatedAt: new Date().toISOString()
+    const next = {
+      ...(changes[t.id] || {}),
+      commentSentAt: stamp(),
+      commentSentTo: recipient,
+      gmailMessageId: result.id || '',
+      updatedAt: stamp()
     };
 
-    if (!save(STORE, changes)) {
-      notice(
-        'تمت الإضافة للتقويم ولكن تعذّر حفظ معرّف الحدث محلياً'
-      );
-      return;
+    persist('task_change', t.id, next);
+
+    notify(`تم إرسال التعليق إلى ${recipient}`);
+
+    if ($('taskDialog').open) {
+      $('emailAudit').textContent =
+        `تم إرسال التعليق إلى ${recipient} ` +
+        `في ${stampView(next.commentSentAt)}`;
     }
 
-    notice('تمت مزامنة Google Calendar');
-
   } catch (err) {
-    notice(err.message);
+    notify(
+      'لم يُرسل البريد: ' + err.message,
+      true
+    );
   }
 }
 
-// =======================================
-// Google Sheets
-// =======================================
+/* =====================================
+   Google Sheets - المزامنة بين الأجهزة
+   ===================================== */
 
-function sheetUrl() {
-  if (!googleConfig.sheetId) {
-    throw Error('أدخل Spreadsheet ID');
+function sheetBase() {
+  if (!config.sheetId) {
+    throw Error('أدخل Spreadsheet ID في الإعدادات');
   }
 
   return (
     'https://sheets.googleapis.com/v4/spreadsheets/' +
-    encodeURIComponent(googleConfig.sheetId)
+    encodeURIComponent(config.sheetId)
   );
 }
 
-async function pullRemote() {
-  const base = sheetUrl();
-  let result;
+async function ensureLogSheet(interactive = true) {
+  const base = sheetBase();
 
-  try {
-    result = await googleRequest(
-      base + '/values/' +
-      encodeURIComponent(
-        "'Jinan_Status'!A2:J10000"
-      )
-    );
-
-  } catch (err) {
-    if (
-      /Unable to parse range|not found/i
-        .test(err.message)
-    ) {
-      return {};
-    }
-
-    throw err;
-  }
-
-  const existing = new Set(
-    tasks.map(t => t.id)
+  const meta = await googleApi(
+    base + '?fields=sheets.properties.title',
+    'GET',
+    undefined,
+    SCOPE.sheets,
+    interactive
   );
 
-  const updates = {};
+  const exists = meta.sheets?.some(
+    s => s.properties?.title === SHEET_NAME
+  );
 
-  for (const row of result.values || []) {
-    const [
-      id,
-      status,
-      assignee,
-      date,
-      receivedAt,
-      decision,
-      notes,
-      proofUrl,
-      calendarEventId,
-      updatedAt
-    ] = row;
-
-    if (existing.has(id)) {
-      updates[id] = {
-        status,
-        assignee,
-        date,
-        receivedAt,
-        decision,
-        notes,
-        proofUrl,
-        calendarEventId,
-        updatedAt
-      };
-    }
-  }
-
-  return updates;
-}
-
-function reconcile(local, remote) {
-  const all = {...local};
-
-  for (
-    const [id, value]
-    of Object.entries(remote)
-  ) {
-    if (
-      !all[id] ||
-      String(value.updatedAt || '') >
-      String(all[id].updatedAt || '')
-    ) {
-      all[id] = value;
-    }
-  }
-
-  return all;
-}
-
-async function pullSheet() {
-  try {
-    changes = reconcile(
-      changes,
-      await pullRemote()
-    );
-
-    if (!save(STORE, changes)) {
-      throw Error('فشل الحفظ المحلي');
-    }
-
-    render();
-    notice('تم الاستيراد');
-
-  } catch (err) {
-    notice(err.message);
-  }
-}
-
-async function pushSheet() {
-  try {
-    const base = sheetUrl();
-
-    const meta = await googleRequest(
-      base + '?fields=sheets.properties.title'
-    );
-
-    const exists = meta.sheets?.some(
-      x => x.properties.title === 'Jinan_Status'
-    );
-
-    if (!exists) {
-      await googleRequest(
-        base + ':batchUpdate',
-        'POST',
-        {
-          requests: [{
+  if (!exists) {
+    await googleApi(
+      base + ':batchUpdate',
+      'POST',
+      {
+        requests: [
+          {
             addSheet: {
               properties: {
-                title: 'Jinan_Status'
+                title: SHEET_NAME
               }
             }
-          }]
-        }
+          }
+        ]
+      },
+      SCOPE.sheets,
+      interactive
+    );
+  }
+}
+
+async function appendEvent(event, interactive = true) {
+  const base = sheetBase();
+
+  const range = encodeURIComponent(
+    `'${SHEET_NAME}'!A:E`
+  );
+
+  await googleApi(
+    `${base}/values/${range}:append` +
+      '?valueInputOption=RAW&insertDataOption=INSERT_ROWS',
+
+    'POST',
+
+    {
+      values: [
+        [
+          event.timestamp,
+          event.type,
+          event.id,
+          JSON.stringify(event.payload),
+          event.editor || ''
+        ]
+      ]
+    },
+
+    SCOPE.sheets,
+    interactive
+  );
+}
+
+function applyRemoteEvent(record) {
+  const {type, id, payload} = record;
+
+  if (
+    !id ||
+    !payload ||
+    typeof payload !== 'object'
+  ) return;
+
+  const old =
+    type === 'task_change'
+      ? changes[id]
+      : type === 'custom_task'
+        ? customTasks[id]
+        : type === 'job'
+          ? jobs[id]
+          : null;
+
+  const latest = String(
+    payload.updatedAt || record.timestamp || ''
+  );
+
+  if (
+    old &&
+    String(old.updatedAt || '') >= latest
+  ) {
+    return;
+  }
+
+  if (
+    type === 'task_change' &&
+    tasks.some(t => t.id === id)
+  ) {
+    changes[id] = payload;
+
+  } else if (type === 'custom_task') {
+    customTasks[id] = payload;
+
+  } else if (type === 'job') {
+    jobs[id] = payload;
+  }
+}
+
+async function readCloud(interactive = true) {
+  const base = sheetBase();
+
+  const range = encodeURIComponent(
+    `'${SHEET_NAME}'!A2:E10000`
+  );
+
+  const data = await googleApi(
+    `${base}/values/${range}`,
+    'GET',
+    undefined,
+    SCOPE.sheets,
+    interactive
+  );
+
+  let count = 0;
+
+  for (const row of data.values || []) {
+    const [
+      timestamp,
+      type,
+      id,
+      payloadJSON,
+      editor
+    ] = row;
+
+    try {
+      applyRemoteEvent({
+        timestamp,
+        type,
+        id,
+        payload: JSON.parse(payloadJSON),
+        editor
+      });
+
+      count++;
+
+    } catch (err) {
+      console.warn('سجل سحابي غير صالح', err);
+    }
+  }
+
+  buildTasks();
+
+  saveLocal(STORE, changes);
+  saveLocal(EXTRA_STORE, customTasks);
+  saveLocal(JOB_STORE, jobs);
+
+  return count;
+}
+
+async function syncCloud({
+  silent = false,
+  interactive = true
+} = {}) {
+  if (syncBusy) return;
+
+  if (!config.sheetId) {
+    if (!silent) {
+      notify('أدخل Spreadsheet ID في الإعدادات', true);
+    }
+    return;
+  }
+
+  syncBusy = true;
+
+  try {
+    await ensureLogSheet(interactive);
+
+    let uploaded = 0;
+
+    while (pending.length) {
+      const entry = pending[0];
+
+      await appendEvent(entry, interactive);
+
+      pending = pending.slice(1);
+
+      if (!saveLocal(PENDING_STORE, pending)) {
+        notify('فشل حفظ قائمة المزامنة محلياً', true);
+      }
+
+      uploaded++;
+    }
+
+    const received = await readCloud(interactive);
+
+    indicator('متزامن مع Google Sheets', 'ok');
+
+    if (!silent) {
+      notify(
+        `تم رفع ${uploaded} تحديثات ` +
+        `واستقبال ${received} سجلاً`
       );
     }
 
-    changes = reconcile(
-      changes,
-      await pullRemote()
-    );
-
-    const keys = [
-      'id',
-      'status',
-      'assignee',
-      'date',
-      'receivedAt',
-      'decision',
-      'notes',
-      'proofUrl',
-      'calendarEventId',
-      'updatedAt'
-    ];
-
-    const ids = new Set(
-      tasks.map(t => t.id)
-    );
-
-    const values = [
-      keys,
-
-      ...Object.entries(changes)
-        .filter(([id]) => ids.has(id))
-        .map(([id, t]) => [
-          id,
-          ...keys.slice(1)
-            .map(key => t[key] || '')
-        ])
-    ];
-
-    const range =
-      `'Jinan_Status'!A1:J${values.length}`;
-
-    await googleRequest(
-      base + '/values/' +
-      encodeURIComponent(range) +
-      '?valueInputOption=RAW',
-
-      'PUT',
-
-      {
-        range,
-        majorDimension: 'ROWS',
-        values
-      }
-    );
-
-    const clearRange =
-      `'Jinan_Status'!A${values.length + 1}:J10000`;
-
-    await googleRequest(
-      base + '/values/' +
-      encodeURIComponent(clearRange) +
-      ':clear',
-
-      'POST',
-      {}
-    );
-
-    save(STORE, changes);
-    notice('تم رفع التعديلات');
+    if (
+      !$('taskDialog').open &&
+      !$('customTaskDialog').open &&
+      !$('jobDialog').open
+    ) {
+      render();
+    }
 
   } catch (err) {
-    notice(err.message);
+    indicator(
+      pending.length
+        ? `غير متزامن (${pending.length})`
+        : 'تعذّر التحديث',
+      'warn'
+    );
+
+    if (!silent) {
+      notify('تعذّرت المزامنة: ' + err.message, true);
+    } else {
+      console.warn('مزامنة Google', err);
+    }
+
+  } finally {
+    syncBusy = false;
   }
 }
 
-// =======================================
-// التنقل والأحداث
-// =======================================
+/* =====================================
+   أحداث الواجهة
+   ===================================== */
 
-function navigate(next) {
-  view = next;
-  category = 'all';
-  query = '';
-  filterStatus = '';
+document.addEventListener('click', async event => {
+  const btn = event.target.closest('button');
 
-  render();
-}
+  if (!btn) return;
 
-document.addEventListener(
-  'click',
-  async event => {
-    const button = event.target.closest('button');
-
-    if (!button) return;
-
-    if (button.dataset.view) {
-      navigate(button.dataset.view);
-      return;
-    }
-
-    if (button.dataset.dept) {
-      department = button.dataset.dept;
-      navigate('department');
-      return;
-    }
-
-    if (button.dataset.task) {
-      openTask(button.dataset.task);
-      return;
-    }
-
-    if (button.dataset.tab) {
-      category = button.dataset.tab;
-      render();
-      return;
-    }
-
-    if (button.dataset.month !== undefined) {
-      month = button.dataset.month;
-      render();
-      return;
-    }
-
-    switch (button.dataset.action) {
-      case 'backup':
-        backup();
-        break;
-
-      case 'restore':
-        el('backupFile').click();
-        break;
-
-      case 'ics':
-        exportICS();
-        break;
-
-      case 'saveGoogle':
-        saveGoogle();
-        break;
-
-      case 'connectGoogle':
-        try {
-          await googleToken();
-          notice('تم الاتصال بـ Google');
-        } catch (err) {
-          notice(err.message);
-        }
-        break;
-
-      case 'pullSheet':
-        await pullSheet();
-        break;
-
-      case 'pushSheet':
-        await pushSheet();
-        break;
-    }
+  if (btn.dataset.view) {
+    navigate(btn.dataset.view);
+    return;
   }
-);
+
+  if (btn.dataset.dept) {
+    department = btn.dataset.dept;
+    navigate('department');
+    return;
+  }
+
+  if (btn.dataset.task) {
+    openTask(btn.dataset.task);
+    return;
+  }
+
+  if (btn.dataset.remind) {
+    await remindTask(btn.dataset.remind);
+    return;
+  }
+
+  if (btn.dataset.tab) {
+    tab = btn.dataset.tab;
+    render();
+    return;
+  }
+
+  if (btn.dataset.month !== undefined) {
+    month = btn.dataset.month;
+    render();
+    return;
+  }
+
+  if (btn.dataset.job) {
+    openJob(btn.dataset.job);
+    return;
+  }
+
+  if (btn.dataset.addOrgRole) {
+    openJob(
+      null,
+      btn.dataset.addOrgDept || '',
+      btn.dataset.addOrgRole
+    );
+    return;
+  }
+
+  if (btn.dataset.newJobDept) {
+    openJob(null, btn.dataset.newJobDept);
+    return;
+  }
+
+  if (btn.dataset.close) {
+    $(btn.dataset.close)?.close();
+    return;
+  }
+
+  switch (btn.dataset.action) {
+    case 'newTask':
+      openNewTask(
+        null,
+        view === 'department' ? department : ''
+      );
+      break;
+
+    case 'addJob':
+      openJob();
+      break;
+
+    case 'backup':
+      backup();
+      break;
+
+    case 'restore':
+      $('backupFile')?.click();
+      break;
+
+    case 'ics':
+      exportIcs();
+      break;
+
+    case 'saveConfig':
+      saveConfig();
+      break;
+
+    case 'connectCalendar':
+      await connectGoogle(
+        SCOPE.calendar,
+        'Google Calendar'
+      );
+      break;
+
+    case 'connectMail':
+      await connectGoogle(SCOPE.gmail, 'Gmail');
+      break;
+
+    case 'connectSheets':
+      await connectGoogle(
+        SCOPE.sheets,
+        'Google Sheets'
+      );
+      break;
+
+    case 'syncCloud':
+      await syncCloud();
+      break;
+  }
+});
 
 document.addEventListener('input', event => {
   if (event.target.id === 'search') {
-    query = event.target.value;
-    updateTable();
+    search = event.target.value;
+    updateRows();
+  }
+
+  if (event.target.id === 'jobSearch') {
+    const cursor = event.target.selectionStart;
+
+    jobSearch = event.target.value;
+    render();
+
+    const input = $('jobSearch');
+
+    if (input) {
+      input.focus();
+      input.setSelectionRange(cursor, cursor);
+    }
   }
 });
 
 document.addEventListener('change', event => {
   if (event.target.id === 'statusFilter') {
-    filterStatus = event.target.value;
-    updateTable();
+    statusFilter = event.target.value;
+    updateRows();
+  }
+
+  if (event.target.id === 'jobDepartmentFilter') {
+    jobDepartment = event.target.value;
+    render();
   }
 
   if (event.target.id === 'backupFile') {
-    importBackup(event.target.files[0]);
+    void restore(event.target.files?.[0]);
   }
 });
 
-el('exportBtn').addEventListener(
+/* =====================================
+   ربط أزرار الصفحات والنوافذ
+   ===================================== */
+
+$('exportBtn').addEventListener('click', backup);
+
+$('refreshCloud').addEventListener(
   'click',
-  backup
+  () => syncCloud()
 );
 
-el('closeDialog').addEventListener(
+$('closeDialog').addEventListener(
   'click',
-  () => dialog.close()
+  () => $('taskDialog').close()
 );
 
-el('taskForm').addEventListener(
-  'submit',
-  event => {
-    event.preventDefault();
+$('taskForm').addEventListener('submit', event => {
+  event.preventDefault();
 
-    if (saveTask()) {
-      dialog.close();
-      notice('تم حفظ التغييرات');
-    }
-  }
-);
+  if (saveTask()) {
+    $('taskDialog').close();
 
-el('calendarDraft').addEventListener(
-  'click',
-  draftCalendar
-);
-
-el('calendarSync').addEventListener(
-  'click',
-  syncCalendar
-);
-
-// =======================================
-// تشغيل البرنامج
-// =======================================
-
-(async function start() {
-  try {
-    const response = await fetch(
-      './data/tasks.json',
-      {cache: 'no-store'}
+    notify(
+      'تم حفظ التغييرات محلياً' +
+      (config.sheetId
+        ? ' وسيُحاول إرسالها إلى Google Sheets'
+        : '؛ لعرضها على جهاز آخر اربط Google Sheets')
     );
+  }
+});
 
-    if (!response.ok) {
-      throw Error(
-        `لم يتم العثور على data/tasks.json (${response.status})`
-      );
-    }
+$('remindDirect').addEventListener(
+  'click',
+  remindFromDialog
+);
 
-    const config = await response.json();
+$('editCustomTask').addEventListener('click', () => {
+  if (
+    !selectedTask ||
+    !customTasks[selectedTask.id]
+  ) return;
 
-    departments = config.departments;
+  $('taskDialog').close();
+  openNewTask(selectedTask.id);
+});
 
-    if (!Array.isArray(departments)) {
-      throw Error('الأقسام غير موجودة في JSON');
-    }
+$('sendComment').addEventListener(
+  'click',
+  sendCommentEmail
+);
 
-    if (Array.isArray(config.tasks)) {
-      tasks = config.tasks;
+$('calendarDraft').addEventListener(
+  'click',
+  calendarDraft
+);
+
+$('customTaskForm').addEventListener('submit', event => {
+  event.preventDefault();
+
+  if (saveCustomTask()) {
+    $('customTaskDialog').close();
+    render();
+    notify('أُضيف العمل بنجاح');
+  }
+});
+
+$('deleteCustomTask').addEventListener(
+  'click',
+  deleteCustomTask
+);
+
+$('jobForm').addEventListener('submit', event => {
+  event.preventDefault();
+
+  if (saveJob()) {
+    $('jobDialog').close();
+    render();
+    notify('تم حفظ بطاقة الوصف الوظيفي');
+  }
+});
+
+$('deleteJob').addEventListener(
+  'click',
+  deleteJob
+);
+
+/* =====================================
+   تشغيل المنظومة وتحميل JSON
+   ===================================== */
+
+(async function initialize() {
+  try {
+    const embedded = $('embeddedData');
+
+    let data;
+
+    if (embedded?.textContent.trim()) {
+      data = JSON.parse(embedded.textContent);
 
     } else {
-      const xml = await wordXml(
-        config.sourceDocx
+      const response = await fetch(
+        './data/tasks.json',
+        {cache: 'no-store'}
       );
 
-      tasks = rowsFromWord(
-        extractTables(xml),
-        departments
-      );
+      if (!response.ok) {
+        throw Error(
+          `لم يُعثر على data/tasks.json (${response.status})`
+        );
+      }
+
+      data = await response.json();
     }
 
     if (
-      config.expectedTasks &&
-      tasks.length !== config.expectedTasks
+      !Array.isArray(data.tasks) ||
+      !Array.isArray(data.departments) ||
+      data.tasks.some(
+        t => !t.id || !t.title || !t.department
+      )
     ) {
-      throw Error(
-        `المهام ${tasks.length} بدلاً من ` +
-        `${config.expectedTasks}. راجع نسخة Word`
-      );
+      throw Error('صيغة ملف الأعمال غير صحيحة');
     }
+
+    baseTasks = data.tasks;
+    departments = data.departments;
+
+    buildTasks();
+
+    indicator(
+      pending.length
+        ? `غير متزامن (${pending.length})`
+        : 'حفظ محلي',
+      pending.length ? 'warn' : ''
+    );
 
     render();
 
-  } catch (err) {
-    console.error(err);
+  } catch (error) {
+    console.error(error);
 
-    content.innerHTML = `
+    $('content').innerHTML = `
       <div class="note">
-        ${e(err.message)}.
-        تأكد من رفع Word وJSON
-        داخل مجلد data.
+        ${e(error.message)}
+        — تأكد من رفع data/tasks.json
+        مع الملفات الأخرى.
       </div>
     `;
   }
 })();
+
+/* =====================================
+   التحديث الدوري من Google Sheets
+   ===================================== */
+
+setInterval(() => {
+  if (
+    document.visibilityState === 'visible' &&
+    config.sheetId &&
+    canUseScope(SCOPE.sheets)
+  ) {
+    void syncCloud({
+      silent: true,
+      interactive: false
+    });
+  }
+}, 90000);
+
