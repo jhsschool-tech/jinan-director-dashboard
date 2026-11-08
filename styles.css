@@ -529,3 +529,190 @@ dialog form {
     flex-direction: column;
   }
 }
+
+/* ===================================
+   JINAN - DEPARTMENT COLORS
+   =================================== */
+
+/* الألوان الافتراضية */
+.dept,
+#content,
+#taskDialog {
+  --dept-accent: #64788b;
+  --dept-ink: #334b62;
+  --dept-soft: #f1f5f8;
+  --dept-dark: #334b62;
+}
+
+/* 1. الإشراف الإداري - برتقالي */
+:is(.dept, #content, #taskDialog)[data-theme="administrative"] {
+  --dept-accent: #EF8B35;
+  --dept-ink: #9b460c;
+  --dept-soft: #fff1e5;
+  --dept-dark: #99400e;
+}
+
+/* 2. شؤون الطلاب - أزرق أكوا */
+:is(.dept, #content, #taskDialog)[data-theme="students"] {
+  --dept-accent: #18AAC0;
+  --dept-ink: #066476;
+  --dept-soft: #e9fafd;
+  --dept-dark: #006777;
+}
+
+/* 3. الإشراف التربوي - أخضر */
+:is(.dept, #content, #taskDialog)[data-theme="pedagogical"] {
+  --dept-accent: #32A46D;
+  --dept-ink: #196945;
+  --dept-soft: #eaf8ef;
+  --dept-dark: #196b47;
+}
+
+/* 4. الموارد البشرية - موف */
+:is(.dept, #content, #taskDialog)[data-theme="hr"] {
+  --dept-accent: #9763C8;
+  --dept-ink: #653889;
+  --dept-soft: #f5effc;
+  --dept-dark: #603683;
+}
+
+/* 5. الشؤون المالية - أصفر خردلي */
+:is(.dept, #content, #taskDialog)[data-theme="finance"] {
+  --dept-accent: #C19A29;
+  --dept-ink: #785b0b;
+  --dept-soft: #fff8df;
+  --dept-dark: #765706;
+}
+
+/* 6. ضمان الجودة - برتقالي محروق */
+:is(.dept, #content, #taskDialog)[data-theme="quality"] {
+  --dept-accent: #D75E30;
+  --dept-ink: #8c3217;
+  --dept-soft: #fff0e9;
+  --dept-dark: #913a1c;
+}
+
+/* ===================================
+   تصميم بطاقات الأقسام
+   =================================== */
+
+.dept {
+  position: relative;
+  border-right: 5px solid var(--dept-accent);
+
+  background: linear-gradient(
+    140deg,
+    #ffffff 20%,
+    var(--dept-soft) 100%
+  );
+
+  box-shadow: 0 7px 20px rgba(22, 45, 69, 0.06);
+
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+/* الدائرة الملونة في البطاقة */
+.dept::before {
+  content: "";
+  position: absolute;
+  top: 20px;
+  left: 18px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--dept-accent);
+}
+
+/* الحركة عند مرور الماوس */
+.dept:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 11px 26px rgba(22, 45, 69, 0.12);
+}
+
+/* لون عنوان القسم */
+.dept strong {
+  color: var(--dept-ink);
+  font-weight: 800;
+}
+
+/* شريط نسبة الإنجاز */
+.dept .progress {
+  height: 7px;
+  background: #e6edf1;
+}
+
+.dept .progress i {
+  background: var(--dept-accent);
+}
+
+/* ===================================
+   ألوان الواجهة داخل كل قسم
+   =================================== */
+
+/* ترويسة صفحة القسم */
+#content[data-theme]:not([data-theme="neutral"]) .hero {
+  background: linear-gradient(
+    110deg,
+    var(--dept-dark),
+    var(--dept-accent)
+  );
+}
+
+/* أرقام مؤشرات الأداء */
+#content[data-theme]:not([data-theme="neutral"]) .kpi strong {
+  color: var(--dept-ink);
+}
+
+/* عناوين الأقسام الداخلية */
+#content[data-theme]:not([data-theme="neutral"]) .section-title h2 {
+  color: var(--dept-ink);
+}
+
+/* زر التصنيف المحدد */
+#content[data-theme]:not([data-theme="neutral"]) .tab.active {
+  background: var(--dept-dark);
+  border-color: var(--dept-dark);
+  color: white;
+}
+
+/* زر فتح تفاصيل المهمة */
+#content[data-theme]:not([data-theme="neutral"]) .row-action {
+  background: var(--dept-soft);
+  color: var(--dept-dark);
+}
+
+/* عناوين الجدول */
+#content[data-theme]:not([data-theme="neutral"]) th {
+  border-bottom: 2px solid var(--dept-accent);
+}
+
+/* ===================================
+   ألوان نافذة تفاصيل المهمة
+   =================================== */
+
+#taskDialog[data-theme]:not([data-theme="neutral"]) {
+  border-top: 5px solid var(--dept-accent);
+}
+
+#taskDialog[data-theme]:not([data-theme="neutral"]) .details b {
+  color: var(--dept-ink);
+}
+
+#taskDialog[data-theme]:not([data-theme="neutral"]) .primary {
+  background: var(--dept-dark);
+}
+
+/* تحسين إمكانية الاستخدام */
+.dept:focus-visible {
+  outline: 2px solid var(--dept-accent);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dept {
+    transition: none;
+  }
+}
+
